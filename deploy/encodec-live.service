@@ -1,6 +1,6 @@
 [Unit]
 Description=Experimental live HQ EnCodec publisher
-Documentation=file:/opt/encodec-live-streamer/README.md
+Documentation=https://github.com/HenryDelMal/encodec-live-streamer file:/opt/encodec-live-streamer/README.md
 After=network-online.target
 Wants=network-online.target
 

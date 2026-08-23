@@ -12,6 +12,11 @@ license = { text = "MIT" }
 authors = [{ name = "EnCodec Live Streamer contributors" }]
 dependencies = ["tomli>=2; python_version < '3.11'"]
 
+[project.urls]
+Homepage = "https://github.com/HenryDelMal/encodec-live-streamer"
+Repository = "https://github.com/HenryDelMal/encodec-live-streamer.git"
+Issues = "https://github.com/HenryDelMal/encodec-live-streamer/issues"
+
 [project.optional-dependencies]
 encode = [
   "encodec @ git+https://github.com/facebookresearch/encodec.git@main",

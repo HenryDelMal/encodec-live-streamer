@@ -13,6 +13,9 @@ a rolling live stream of independently decodable HQ Meta EnCodec files. FFmpeg
 provides 48 kHz stereo PCM, Python runs Meta's official 48 kHz model, and nginx
 serves an atomic JSON manifest plus immutable numbered ECDC segments.
 
+Canonical repository:
+[github.com/HenryDelMal/encodec-live-streamer](https://github.com/HenryDelMal/encodec-live-streamer)
+
 This is an independent experiment. It is not an official Meta, Facebook,
 EnCodec, FFmpeg, PyTorch, or nginx project and is not endorsed by them. The codec
 architecture, reference implementation, and model weights come from
@@ -103,10 +106,10 @@ sudo apt update
 sudo apt install -y ffmpeg git python3 python3-venv
 ```
 
-Clone your repository, then install into a virtual environment:
+Clone the canonical repository, then install into a virtual environment:
 
 ```bash
-git clone https://github.com/your-account/encodec-live-streamer.git
+git clone https://github.com/HenryDelMal/encodec-live-streamer.git
 cd encodec-live-streamer
 python3 -m venv .venv
 source .venv/bin/activate
@@ -357,3 +360,6 @@ This service code is released under the MIT License in [LICENSE](LICENSE).
 Meta's EnCodec project, checkpoint, FFmpeg, PyTorch, torchaudio, nginx, and
 Android/ExecuTorch components retain their respective licenses. Review upstream
 licenses before redistribution.
+
+Issues and source updates belong in the
+[GitHub repository](https://github.com/HenryDelMal/encodec-live-streamer).
