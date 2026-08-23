@@ -1,0 +1,7 @@
+include LICENSE
+include Makefile
+include README.md
+recursive-include config *.toml
+recursive-include deploy *.conf *.service
+recursive-include docs *.md
+recursive-include scripts *.sh

@@ -1,0 +1,32 @@
+[stream]
+# Any URL/path/device FFmpeg accepts. Input-specific options go before -i.
+input = "https://radio.example/live.mp3"
+output_dir = "/opt/encodec-live/public"
+
+# Examples:
+# ALSA: input = "hw:0" and input_format = "alsa"
+# Realtime looping file: input_options = ["-re", "-stream_loop", "-1"]
+# SRT listener: input = "srt://0.0.0.0:9000?mode=listener"
+input_options = []
+# input_format = "alsa"
+
+ffmpeg = "/usr/bin/ffmpeg"
+# Supported HQ targets: 3, 6, 12, or 24 kbps. These map to 2, 4, 8,
+# or 16 raw codebooks respectively.
+bandwidth_kbps = 12
+# HQ EnCodec advances by 0.99 s internally. Use an exact 0.99 s multiple to
+# avoid tiny tail frames and reduce clicks at independently encoded boundaries.
+segment_duration = 3.96
+window_segments = 8
+# Keep this many additional old files on disk to protect clients that fetched a
+# manifest immediately before it rolled forward.
+stale_grace_segments = 2
+# Use "cpu", "cuda", or "auto". CPU is the predictable server default.
+device = "cpu"
+# Restart FFmpeg after EOF or an input failure and mark the next segment as a
+# discontinuity. Set false for a finite file that should end normally.
+restart_ffmpeg = true
+restart_delay = 2.0
+manifest_name = "stream.json"
+# Disable only for disposable/test output when lower durability is acceptable.
+fsync = true
