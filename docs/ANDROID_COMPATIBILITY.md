@@ -36,6 +36,11 @@ The Android live implementation should:
 6. Configure `AudioTrack` for 24 kHz mono or 48 kHz stereo as declared by the
    stream instead of assuming the HQ layout.
 
+The manifest may contain an optional top-level `title`. Android may use it as a
+display label and fall back to its existing URL-derived label when absent. It
+must not use the title for stream identity or codec selection, and JSON parsing
+should continue to ignore unknown fields for version-1 compatibility.
+
 The related Android task already contains C++ decoders and ECDC parsing for both
 profiles. No Python, PyTorch, ExecuTorch, Flutter, or server model file is needed
 on the phone.

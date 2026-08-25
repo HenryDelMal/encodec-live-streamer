@@ -356,6 +356,16 @@ Configuration is TOML. Unknown keys, unsupported sample-rate/bandwidth pairs,
 unsafe manifest names, invalid thread counts, and invalid window/duration values
 are rejected. See the fully commented `config/encodec-live.example.toml`.
 
+An optional human-readable stream title can be published in `stream.json`:
+
+```toml
+title = "My EnCodec Stream"
+```
+
+When `title` is omitted, the manifest remains unchanged. The field is additive,
+does not alter the protocol version or codec initialization, and older clients
+should ignore it. See `docs/PROTOCOL.md`.
+
 ## Tests and repository verification
 
 Core tests do not load PyTorch or download model weights:

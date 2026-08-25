@@ -2,6 +2,9 @@
 # Any URL/path/device FFmpeg accepts. Input-specific options go before -i.
 input = "https://radio.example/live.mp3"
 output_dir = "/opt/encodec-live/public"
+# Optional human-readable label published as the top-level `title` in stream.json.
+# Existing manifests remain unchanged when this setting is omitted.
+# title = "My EnCodec Stream"
 
 # Examples:
 # ALSA: input = "hw:0" and input_format = "alsa"

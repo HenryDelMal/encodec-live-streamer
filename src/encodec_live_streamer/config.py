@@ -34,6 +34,7 @@ MODEL_PROFILES = {
 class Config:
     input: str
     output_dir: pathlib.Path
+    title: str | None = None
     input_format: str | None = None
     input_options: tuple[str, ...] = ()
     ffmpeg: str = "ffmpeg"
@@ -100,6 +101,11 @@ class Config:
     def validate(self) -> Config:
         if not self.input:
             raise ValueError("input must not be empty")
+        if self.title is not None:
+            if not isinstance(self.title, str):
+                raise ValueError("title must be a string")
+            if not self.title.strip():
+                raise ValueError("title must not be empty")
         if isinstance(self.samplerate, bool) or not isinstance(self.samplerate, int):
             raise ValueError("samplerate must be the integer 24 or 48")
         if self.samplerate not in MODEL_PROFILES:

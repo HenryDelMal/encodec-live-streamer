@@ -143,7 +143,7 @@ class ManifestStore:
 
     def document(self) -> dict[str, Any]:
         media_sequence = self.segments[0]["sequence"] if self.segments else self.next_sequence
-        return {
+        document = {
             "format": "encodec-live-v1",
             "version": 1,
             "updated_at": utc_now(),
@@ -154,6 +154,9 @@ class ManifestStore:
             "init": self.init,
             "segments": self.segments,
         }
+        if self.config.title is not None:
+            document["title"] = self.config.title
+        return document
 
     def write_manifest(self) -> None:
         encoded = (json.dumps(self.document(), indent=2, sort_keys=True) + "\n").encode()

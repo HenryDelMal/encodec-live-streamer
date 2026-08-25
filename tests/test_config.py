@@ -92,3 +92,14 @@ class ConfigTests(unittest.TestCase):
             path.write_text("[stream]\nbandwidth_kbps = 12\n")
             with self.assertRaisesRegex(ValueError, "input, output_dir"):
                 Config.from_toml(path)
+
+    def test_optional_title_from_toml_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stream.toml"
+            path.write_text(
+                '[stream]\ninput = "x"\noutput_dir = "public"\n'
+                'title = "Bio Bio Santiago"\n'
+            )
+            self.assertEqual(Config.from_toml(path).title, "Bio Bio Santiago")
+            with self.assertRaisesRegex(ValueError, "title must not be empty"):
+                Config(input="x", output_dir=Path(directory), title="  ").validate()

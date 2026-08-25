@@ -22,6 +22,24 @@ def publish(store: ManifestStore, sequence_in_epoch: int, discontinuity: bool = 
 
 
 class ManifestTests(unittest.TestCase):
+    def test_optional_stream_title_is_additive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            untitled = ManifestStore(
+                Config(input="unused", output_dir=path, fsync=False).validate()
+            ).document()
+            self.assertNotIn("title", untitled)
+
+            titled = ManifestStore(
+                Config(
+                    input="unused",
+                    output_dir=path,
+                    title="Bio Bio Santiago",
+                    fsync=False,
+                ).validate()
+            ).document()
+            self.assertEqual(titled["title"], "Bio Bio Santiago")
+
     def test_rolls_manifest_and_cleans_with_grace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

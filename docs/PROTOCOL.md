@@ -17,6 +17,7 @@ The manifest has these fields:
 | Field | Meaning |
 | --- | --- |
 | `format`, `version` | Fixed as `encodec-live-v1` and `1`. |
+| `title` | Optional human-readable stream title. Omitted when not configured. It does not identify codec compatibility. |
 | `updated_at` | RFC 3339 UTC time at manifest publication. |
 | `media_sequence` | Sequence of the first listed segment, or the next sequence when empty. |
 | `discontinuity_sequence` | Number of discontinuity markers removed from the head of this rolling manifest. |
@@ -24,6 +25,10 @@ The manifest has these fields:
 | `independent_segments` | Always `true`. |
 | `init` | Stream-wide codec/container information shown below. |
 | `segments` | Ordered rolling window of segment records. |
+
+Clients must ignore unknown manifest fields. The optional `title` field is an
+additive version-1 extension: publishers do not emit it unless configured, and
+clients may display it or fall back to their existing URL-derived label.
 
 `init` fixes ECDC v0, the selected model profile, sample rate, channels, ten
 bits per codebook, configured bandwidth/codebooks, `language_model=false`, and
