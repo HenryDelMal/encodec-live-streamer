@@ -11,6 +11,7 @@ import sys
 from . import __version__
 from .config import Config
 from .ecdc import parse_header
+from .encoder import native_command, native_encoder_path
 from .ffmpeg import command
 from .service import LiveService
 
@@ -22,7 +23,9 @@ def parser() -> argparse.ArgumentParser:
     commands = root.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="run the live encoder and publisher")
     serve.add_argument("--config", required=True)
-    check = commands.add_parser("check", help="validate configuration and FFmpeg availability")
+    check = commands.add_parser(
+        "check", help="validate configuration, FFmpeg, native worker, and model"
+    )
     check.add_argument("--config", required=True)
     inspect = commands.add_parser("inspect", help="print an ECDC segment header")
     inspect.add_argument("path")
@@ -50,12 +53,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(completed.stdout.splitlines()[0])
             print("command:", " ".join(command(config)))
-            if config.segment_is_hq_aligned:
-                print("HQ segment alignment: OK")
+            native = native_encoder_path(config)
+            if shutil.which(native) is None and not pathlib.Path(native).is_file():
+                raise RuntimeError(f"native encoder executable not found: {config.native_encoder}")
+            if not config.model_path.is_file():
+                raise RuntimeError(f"combined EnCodec model not found: {config.model_path}")
+            model_check = subprocess.run(
+                native_command(config, check_model=True),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            print(model_check.stdout.strip())
+            if config.segment_is_aligned:
+                print("segment alignment: OK")
             else:
                 print(
-                    "warning: segment_duration is not aligned to the HQ 0.99s stride; "
-                    "prefer 1.98, 2.97, or 3.96 seconds",
+                    f"warning: segment_duration is not aligned to {config.alignment_description}",
                 )
             print("configuration: OK")
             return 0

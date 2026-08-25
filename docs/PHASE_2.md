@@ -16,7 +16,8 @@ because its header declares total audio length.
 
 Only after the service protocol and client behavior stabilize, consider:
 
-- a reusable C/C++ EnCodec inference library with an explicit model/runtime ABI;
+- promote the included C++ EnCodec core from its current private model format
+  and worker API to a versioned public library/runtime ABI;
 - an FFmpeg encoder wrapper (`AVCodec`) for finite ECDC objects, or a filter that
   emits code tensors/packets;
 - a muxer for this segmented live protocol, if FFmpeg's segmenting abstractions
@@ -28,4 +29,3 @@ Only after the service protocol and client behavior stabilize, consider:
 That phase must preserve independently decodable chunks and non-LM output. It
 should be justified by latency, resource, or operational measurements rather
 than by integration aesthetics.
-

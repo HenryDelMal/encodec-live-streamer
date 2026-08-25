@@ -9,7 +9,6 @@ from .config import Config
 
 
 LOG = logging.getLogger(__name__)
-BYTES_PER_SAMPLE_FRAME = 2 * 4  # stereo float32
 
 
 def command(config: Config) -> list[str]:
@@ -25,9 +24,9 @@ def command(config: Config) -> list[str]:
             "0:a:0",
             "-vn",
             "-ac",
-            "2",
+            str(config.channels),
             "-ar",
-            "48000",
+            str(config.sample_rate),
             "-c:a",
             "pcm_f32le",
             "-f",
@@ -57,7 +56,8 @@ class FfmpegInput:
     def chunks(self, sample_frames: int) -> Iterator[bytes]:
         if self.process is None or self.process.stdout is None:
             raise RuntimeError("FFmpeg is not running")
-        wanted = sample_frames * BYTES_PER_SAMPLE_FRAME
+        bytes_per_sample_frame = self.config.bytes_per_sample_frame
+        wanted = sample_frames * bytes_per_sample_frame
         buffer = bytearray()
         while len(buffer) < wanted:
             block = self.process.stdout.read(wanted - len(buffer))
@@ -70,7 +70,7 @@ class FfmpegInput:
                 del buffer[:wanted]
             else:
                 # A final whole-sample partial segment is still independently useful.
-                usable = len(buffer) - (len(buffer) % BYTES_PER_SAMPLE_FRAME)
+                usable = len(buffer) - (len(buffer) % bytes_per_sample_frame)
                 if usable:
                     yield bytes(buffer[:usable])
                 return
@@ -93,4 +93,3 @@ class FfmpegInput:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-

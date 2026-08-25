@@ -13,7 +13,8 @@ fi
 
 if grep -R -n -E '/Users/|/home/[^/ ]+|/www/|ardilla|cuy\.cl|dps\.live' \
     --exclude-dir=.git --exclude-dir=.venv --exclude-dir=.cache \
-    --exclude-dir=__pycache__ --exclude-dir=work --exclude-dir=outputs \
+    --exclude-dir=eigen \
+    --exclude-dir=__pycache__ --exclude-dir=build --exclude-dir=work --exclude-dir=outputs \
     --exclude='*.pyc' --exclude=verify-repository.sh .; then
     echo "Potential machine-specific value found; review before publishing." >&2
     exit 1

@@ -1,59 +1,50 @@
-# Android EnCodec Player compatibility assessment
+# Android EnCodec Player compatibility
 
-Assessment target: <https://github.com/HenryDelMal/Android-encodec-player>,
-repository state inspected on 2026-08-22. No changes were made to that project.
+This streamer now shares the portable Eigen-based C++ EnCodec core developed in
+the **Build Android EnCodec decoder** project. The Linux side uses its encoder;
+the Android player uses its decoder through JNI. Model files use the same native
+format, although Linux needs combined encoder/decoder weights while the APK may
+ship smaller decoder-only files.
 
-## What already matches
+## Codec and container compatibility
 
-The player's ECDC reader accepts the exact segment body produced here:
+The current native Android implementation accepts both stream profiles:
 
-- ECDC container version 0;
-- `encodec_48khz`, 48 kHz stereo;
-- 2, 4, 8, or 16 codebooks (nominal 3, 6, 12, or 24 kbps);
-- raw 10-bit code indices with `lm=false`;
-- the official one-second HQ frame layout, per-frame scale, and 1% overlap.
+- `encodec_24khz`, 24 kHz mono, 75 code frames/second, no normalization scale;
+- `encodec_48khz`, 48 kHz stereo, 150 code frames/second, official one-second
+  frames with per-frame scale and 1% overlap;
+- ECDC container version 0 with raw 10-bit code indices and `lm=false`;
+- independently initialized ECDC files for every live segment.
 
-Each server segment can therefore be passed to a fresh `EcdcReader` and decoded
-by the existing `ExecuTorchEncodecDecoder`; no decoder model or ECDC bit unpacker
-change is required.
+At 3 kbps, a 24 kHz stream carries four codebooks while a 48 kHz stream carries
+two. Clients must trust and validate the ECDC `m`/`nc` metadata and manifest
+`init`; they must not infer the model only from bitrate.
 
-## Android work required
+## Live transport expectations
 
-The current app accepts local files and direct HTTPS URLs for finite `.ecdc`
-objects. It treats one URL as one playlist track and closes/recreates playback
-around tracks. It does not parse `stream.json` or follow numbered live segments.
+The Android live implementation should:
 
-A future Android change should add:
+1. Poll the JSON v1 manifest with caching disabled and resolve relative segment
+   URLs against the manifest URL.
+2. Schedule increasing sequence numbers, maintain a small live-edge buffer, and
+   validate byte length/SHA-256 before decode.
+3. Select the native 24 kHz or 48 kHz decoder from `init.model`, `sample_rate`,
+   and `channels`, rejecting inconsistent combinations.
+4. Keep one decoder/audio sink alive while opening a fresh ECDC reader for each
+   independently encoded segment.
+5. Flush and rebuffer after a sequence gap, epoch change, or discontinuity.
+6. Configure `AudioTrack` for 24 kHz mono or 48 kHz stereo as declared by the
+   stream instead of assuming the HQ layout.
 
-1. A live-source type and JSON v1 manifest model/parser with strict validation.
-2. A poller using cache-disabled requests, relative-URI resolution, bounded
-   retry/backoff, and a selectable live-edge buffer (two or three segments is a
-   reasonable start).
-3. A segment scheduler keyed by sequence, with byte-length/SHA-256 validation,
-   late-window recovery, and no duplicate playback after manifest refreshes.
-4. Reuse of one `ExecuTorchEncodecDecoder` and one `AudioTrackSink` while opening
-   a fresh `EcdcReader` per segment. The current finite-file playback session
-   should be refactored rather than nesting one session per segment.
-5. Discontinuity handling that drains or flushes queued PCM, resets timing, and
-   re-buffers on `discontinuity=true`, an epoch change, or a sequence gap.
-6. Live UI semantics: `LIVE` state, latency/buffer display, no finite seek bar,
-   and a jump-to-live action. Seeking can later be bounded to listed/retained
-   segments.
-7. Lifecycle cancellation and network tests for unchanged manifests, atomic
-   window rollover, 404 from cleanup, restart epochs, corrupt hashes, and slow
-   decode/network conditions.
+The related Android task already contains C++ decoders and ECDC parsing for both
+profiles. No Python, PyTorch, ExecuTorch, Flutter, or server model file is needed
+on the phone.
 
-HQ segment boundaries may produce a small audible seam because independently
-encoded chunks reset model context. The existing decoder already handles the
-official overlap *inside* each ECDC file; it does not crossfade between separate
-files. Start with direct PCM concatenation and measure. If needed, add a short
-client crossfade, while ensuring it does not shorten the declared timeline.
+## Boundaries
 
-## Compatibility conclusion
-
-Codec compatibility is high; transport compatibility is not yet implemented.
-The required work is concentrated in Android networking/scheduling/playback
-lifecycle code, not EnCodec inference. The current app cannot play the live
-manifest until that work lands, but it can be used to download and manually
-play any individual emitted segment during server testing.
-
+Independently encoded chunks reset neural context. The 48 kHz model still uses
+its official overlap-add *inside* each ECDC file, but neither model carries
+context across numbered files. Keep direct PCM concatenation as the baseline;
+if a measured seam remains, apply a short stateful client de-clicker without
+changing the declared timeline. Do not normalize each segment independently,
+because gain jumps can create another boundary artifact.

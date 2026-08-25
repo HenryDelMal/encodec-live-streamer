@@ -10,9 +10,9 @@ from encodec_live_streamer.manifest import ManifestStore
 
 
 def publish(store: ManifestStore, sequence_in_epoch: int, discontinuity: bool = False) -> None:
-    samples = 48_000
+    samples = store.config.sample_rate
     store.publish_segment(
-        make_test_ecdc(samples, store.config.codebooks),
+        make_test_ecdc(samples, store.config.codebooks, store.config.model),
         sample_count=samples,
         pts_samples=sequence_in_epoch * samples,
         program_date_time=f"2026-01-01T00:00:0{sequence_in_epoch}Z",
@@ -64,13 +64,31 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual([item["sequence"] for item in second.segments], [0, 1])
             self.assertTrue(second.segments[-1]["discontinuity"])
 
+    def test_24khz_manifest_init_and_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                input="unused",
+                output_dir=Path(directory),
+                samplerate=24,
+                bandwidth_kbps=3,
+                fsync=False,
+            ).validate()
+            store = ManifestStore(config)
+            publish(store, 0, discontinuity=True)
+            document = json.loads((Path(directory) / "stream.json").read_text())
+            self.assertEqual(document["init"]["model"], "encodec_24khz")
+            self.assertEqual(document["init"]["sample_rate"], 24_000)
+            self.assertEqual(document["init"]["channels"], 1)
+            self.assertEqual(document["init"]["codebooks"], 4)
+            self.assertEqual(document["segments"][0]["duration"], 1.0)
+
     def test_rejects_wrong_segment_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Config(input="unused", output_dir=Path(directory), fsync=False).validate()
             store = ManifestStore(config)
             with self.assertRaisesRegex(ValueError, "does not match"):
                 store.publish_segment(
-                    make_test_ecdc(24_000, config.codebooks),
+                    make_test_ecdc(24_000, config.codebooks, config.model),
                     sample_count=48_000,
                     pts_samples=0,
                     program_date_time="2026-01-01T00:00:00Z",

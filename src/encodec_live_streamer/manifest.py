@@ -63,9 +63,9 @@ class ManifestStore:
         return {
             "container": "ecdc",
             "container_version": 0,
-            "model": "encodec_48khz",
-            "sample_rate": 48_000,
-            "channels": 2,
+            "model": self.config.model,
+            "sample_rate": self.config.sample_rate,
+            "channels": self.config.channels,
             "bits_per_codebook": 10,
             "bandwidth_kbps": self.config.bandwidth_kbps,
             "codebooks": self.config.codebooks,
@@ -109,7 +109,7 @@ class ManifestStore:
     ) -> dict[str, Any]:
         header = parse_header(payload)
         if (
-            header.model != "encodec_48khz"
+            header.model != self.config.model
             or header.audio_length != sample_count
             or header.codebooks != self.config.codebooks
             or header.language_model
@@ -122,7 +122,7 @@ class ManifestStore:
         segment = {
             "sequence": sequence,
             "uri": uri,
-            "duration": sample_count / 48_000,
+            "duration": sample_count / self.config.sample_rate,
             "sample_count": sample_count,
             "pts_samples": pts_samples,
             "program_date_time": program_date_time,

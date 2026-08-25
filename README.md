@@ -9,9 +9,11 @@
 > risk. Do not rely on it for safety-critical or irreplaceable broadcasts.
 
 An experimental Linux service that turns any FFmpeg-supported audio input into
-a rolling live stream of independently decodable HQ Meta EnCodec files. FFmpeg
-provides 48 kHz stereo PCM, Python runs Meta's official 48 kHz model, and nginx
-serves an atomic JSON manifest plus immutable numbered ECDC segments.
+a rolling live stream of independently decodable Meta EnCodec files. FFmpeg
+provides either 24 kHz mono or 48 kHz stereo PCM, a persistent Eigen-based C++
+worker performs EnCodec inference, and nginx serves an atomic JSON manifest plus
+immutable numbered ECDC segments. Python only coordinates processes and files;
+PyTorch is not used while the service runs.
 
 Canonical repository:
 [github.com/HenryDelMal/encodec-live-streamer](https://github.com/HenryDelMal/encodec-live-streamer)
@@ -20,18 +22,22 @@ This is an independent experiment. It is not an official Meta, Facebook,
 EnCodec, FFmpeg, PyTorch, or nginx project and is not endorsed by them. The codec
 architecture, reference implementation, and model weights come from
 [Meta/Facebook Research's official EnCodec repository](https://github.com/facebookresearch/encodec),
-which retains its own MIT license and attribution. Model weights are downloaded
-at installation/runtime and are not included in this repository.
+which retains its own MIT license and attribution. The portable C++ runtime is
+derived from Peter Featherstone's `encodec.cpp` and the dual-model work used by
+the Android EnCodec Player; it retains its MIT notice. Eigen is included under
+MPL-2.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Model weights are
+downloaded and converted during installation and are not included here.
 
 ## Status and design
 
 ```text
 file / ALSA / HTTP radio / Icecast / RTMP / SRT / any FFmpeg input
                                 |
-                    FFmpeg: stereo f32le PCM
-                           48,000 Hz
+                 FFmpeg: mono/stereo f32le PCM
+                       24,000 or 48,000 Hz
                                 |
-                  official Meta HQ EnCodec model
+              persistent native C++ EnCodec worker
+               official 24 kHz or 48 kHz weights
                          non-LM ECDC v0
                                 |
           segment-000000000000.ecdc, segment-...ecdc
@@ -41,7 +47,7 @@ file / ALSA / HTTP radio / Icecast / RTMP / SRT / any FFmpeg input
                               nginx
 ```
 
-- FFmpeg owns input demuxing, reconnect options, resampling, and stereo
+- FFmpeg owns input demuxing, reconnect options, resampling, and channel
   conversion. FFmpeg itself is not patched.
 - Every segment is a complete official ECDC v0 file with `lm=false` and can be
   decoded independently.
@@ -53,9 +59,24 @@ file / ALSA / HTTP radio / Icecast / RTMP / SRT / any FFmpeg input
 - The protocol is HLS-shaped but is **not standard HLS**. Ordinary HLS players
   do not understand EnCodec. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
-## Segment duration and boundary alignment
+## Model selection and segment alignment
 
-The HQ EnCodec model uses one-second internal windows with a 47,520-sample
+Select a complete codec profile using `samplerate` in TOML—not a model name:
+
+```toml
+# 24 = 24 kHz mono; 48 = 48 kHz stereo
+samplerate = 24
+bandwidth_kbps = 3
+threads = 1
+```
+
+The 24 kHz model supports 1.5, 3, 6, 12, and 24 kbps. At 3 kbps it
+uses four codebooks. The 48 kHz model supports 3, 6, 12, and 24 kbps, mapping
+to 2, 4, 8, and 16 codebooks. Sample rate, channel count, FFmpeg output,
+model file, ECDC header, timestamps, and manifest initialization are derived
+from this single setting.
+
+The 48 kHz EnCodec model uses one-second internal windows with a 47,520-sample
 stride: exactly **0.99 seconds at 48 kHz**. Independent outer segments should be
 an exact multiple of 0.99 seconds.
 
@@ -73,29 +94,52 @@ the seam but cannot guarantee mathematically gapless audio because independent
 segments reset model context. A client-side boundary de-clicker can improve it
 further without changing the server protocol.
 
-The shipped default is:
+The causal 24 kHz model produces one latent frame per 320 input samples, or 75
+frames per second. Its segment duration should be a multiple of 1/75 second.
+The shipped `3.96` second duration is aligned for both models: 190,080 samples
+at 48 kHz or 95,040 samples/297 codec frames at 24 kHz.
+
+The shipped default remains:
 
 ```toml
 segment_duration = 3.96
 ```
 
-`encodec-live check` reports whether the configured duration is aligned, and the
-running service logs a warning for an unaligned value.
+`encodec-live check` reports whether the configured duration is aligned for the
+selected profile, and the running service logs a warning when it is not.
 
 ## Requirements
 
 - A recent mainstream Linux distribution using systemd for the supplied unit.
-- Python 3.9 or newer, subject to PyTorch wheel availability for the platform.
-- FFmpeg, Git, and Python virtual-environment support.
+- Python 3.9 or newer.
+- A C++20 compiler, CMake, FFmpeg, and Python virtual-environment support.
 - nginx or another static HTTP server if clients need network access.
-- Sufficient CPU/RAM for the HQ neural model. Real-time performance is not
+- Sufficient CPU/RAM for the selected neural model. Real-time performance is not
   guaranteed; measure it on the intended server.
-- Internet access during installation and the first checkpoint download.
+- Internet access while preparing the official checkpoints. PyTorch is used in
+  a temporary model-export environment and removed afterward.
 
-The `encode` extra installs EnCodec from the current `main` branch of Meta's
-official Git repository rather than the older PyPI release. A moving branch is
-not reproducible, so record the resolved commit from `pip freeze` for deployments
-that must be rebuilt exactly.
+The runtime model format contains both encoder and decoder weights. This lets the
+same C++ core support Linux encoding and Android decoding while keeping large
+model files outside Git.
+
+### Upgrading an existing installation
+
+Version 0.2 replaces the Python/PyTorch runtime encoder. Re-run
+`scripts/install-systemd.sh` to compile the worker and prepare both models, then
+update `/etc/encodec-live.toml`:
+
+```toml
+native_encoder = "/opt/encodec-live-streamer/bin/encodec-live-native"
+model_dir = "/opt/encodec-live/models"
+samplerate = 48
+threads = 1
+```
+
+Remove the old `device` key; it is deliberately rejected as an unknown setting
+because the native runtime is CPU-only. Existing output segments can remain.
+Changing `samplerate` makes the publisher start a fresh compatible manifest
+window while preserving monotonically increasing filenames.
 
 ## Quick local run
 
@@ -103,7 +147,7 @@ On Debian or Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg git python3 python3-venv
+sudo apt install -y build-essential cmake ffmpeg git python3 python3-venv
 ```
 
 Clone the canonical repository, then install into a virtual environment:
@@ -114,14 +158,17 @@ cd encodec-live-streamer
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install torch torchaudio \
-  --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -e '.[encode]'
-python -m pip freeze | grep -i encodec
+python -m pip install -e .
+./scripts/build-native.sh
+MODEL_DIR="$PWD/models" \
+NATIVE_ENCODER="$PWD/bin/encodec-live-native" \
+  ./scripts/prepare-models.sh
 ```
 
-For CUDA or another PyTorch platform, replace the CPU installation command with
-the appropriate command from the official PyTorch installation instructions.
+`prepare-models.sh` temporarily installs CPU PyTorch and NumPy solely to read
+Meta's checkpoints and export portable combined model files. It does not add
+PyTorch to `.venv`. The exporter defaults to PyTorch 2.4.1 so it still has a
+Python 3.9 wheel; `PYTORCH_PACKAGE` can override that build-time dependency.
 
 Create a local configuration and choose a writable output directory:
 
@@ -130,15 +177,22 @@ cp config/encodec-live.example.toml encodec-live.toml
 mkdir -p public
 ```
 
-Edit `encodec-live.toml` so `input` points to a real input and `output_dir`
-points to the absolute path of `./public`. Then:
+Edit `encodec-live.toml` so `input` points to a real input, `output_dir` points
+to the absolute path of `./public`, and these local paths match the build above:
+
+```toml
+native_encoder = "/absolute/path/to/encodec-live-streamer/bin/encodec-live-native"
+model_dir = "/absolute/path/to/encodec-live-streamer/models"
+```
+
+Then:
 
 ```bash
 encodec-live check --config encodec-live.toml
 encodec-live serve --config encodec-live.toml
 ```
 
-The first encoder run downloads Meta's official checkpoint. To inspect output:
+To inspect output:
 
 ```bash
 encodec-live inspect public/segment-000000000000.ecdc
@@ -207,8 +261,10 @@ machine-specific input or domain:
 
 ```text
 /opt/encodec-live-streamer/              application source
-/opt/encodec-live-streamer/.venv/        Python libraries and CLI
-/opt/encodec-live-streamer/.cache/torch/ model checkpoint cache
+/opt/encodec-live-streamer/bin/          native C++ worker
+/opt/encodec-live-streamer/.venv/        small Python coordinator and CLI
+/opt/encodec-live-streamer/.cache/torch/ installation-time checkpoint cache
+/opt/encodec-live/models/                combined native model files
 /opt/encodec-live/public/                manifest and ECDC segments
 /etc/encodec-live.toml                   administrator configuration
 ```
@@ -217,7 +273,7 @@ Install system packages first:
 
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg git nginx python3 python3-venv
+sudo apt install -y build-essential cmake ffmpeg git nginx python3 python3-venv
 ```
 
 Then run the installer from a clean clone:
@@ -230,19 +286,21 @@ The installer:
 
 - creates the unprivileged `encodec-live` account;
 - copies only application source/configuration/documentation into `/opt`;
-- creates the virtual environment and installs CPU PyTorch, torchaudio, and
-  EnCodec from Meta's Git repository;
-- creates the model cache and public output directories with deliberate
-  permissions;
+- compiles the Eigen-based C++ encoder/decoder runtime with CMake;
+- creates a minimal Python virtual environment for orchestration;
+- temporarily installs CPU PyTorch in a disposable environment, downloads
+  Meta's official checkpoints, exports combined native model files, and removes
+  that temporary environment;
+- creates model, cache, and public output directories with deliberate permissions;
 - installs the example configuration only when `/etc/encodec-live.toml` does
   not already exist;
 - installs the systemd unit but does not start it with the placeholder input.
 
-To use a different PyTorch wheel index:
+To override the temporary exporter version, for example on a Python version
+unsupported by the default wheel:
 
 ```bash
-sudo PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cu128 \
-  ./scripts/install-systemd.sh
+sudo PYTORCH_PACKAGE=torch ./scripts/install-systemd.sh
 ```
 
 Edit the configuration before startup:
@@ -256,7 +314,8 @@ sudo systemctl status encodec-live --no-pager
 sudo journalctl -u encodec-live -f
 ```
 
-The example unit keeps source and `.venv` root-owned/read-only. Only
+The example unit keeps source, native binaries, models, and `.venv`
+root-owned/read-only. Only
 `/opt/encodec-live-streamer/.cache` and `/opt/encodec-live/public` are writable
 by the service. Those paths must exist before `ProtectSystem=strict` constructs
 its namespace; the installer creates them. On restricted containers that do not
@@ -293,16 +352,23 @@ encodec-live inspect SEGMENT.ecdc    show an ECDC header
 encodec-live --version               show the service version
 ```
 
-Configuration is TOML. Unknown keys, unsupported bandwidths, unsafe manifest
-names, and invalid window/duration values are rejected. See the fully commented
-`config/encodec-live.example.toml`.
+Configuration is TOML. Unknown keys, unsupported sample-rate/bandwidth pairs,
+unsafe manifest names, invalid thread counts, and invalid window/duration values
+are rejected. See the fully commented `config/encodec-live.example.toml`.
 
 ## Tests and repository verification
 
-Core tests do not load PyTorch or download the model:
+Core tests do not load PyTorch or download model weights:
 
 ```bash
 make test
+```
+
+Compile the native worker as part of verification:
+
+```bash
+cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native --parallel
 ```
 
 Before publishing a repository:
@@ -319,8 +385,8 @@ excluded by `.gitignore`.
 For a real integration smoke test, use a short non-copyrighted input and verify:
 
 1. the manifest appears only after its referenced segment is complete;
-2. `encodec-live inspect` reports `encodec_48khz`, the configured codebooks, and
-   `language_model: false`;
+2. `encodec-live inspect` reports the selected `encodec_24khz` or
+   `encodec_48khz` model, configured codebooks, and `language_model: false`;
 3. each numbered file decodes independently with Meta's reference decoder;
 4. encoding stays ahead of real time with stable memory use;
 5. restart recovery advances sequence numbers and marks a discontinuity;
@@ -328,7 +394,7 @@ For a real integration smoke test, use a short non-copyrighted input and verify:
 
 ## Android client compatibility
 
-The emitted files match the HQ ECDC support in the experimental
+The emitted files match the 24 kHz mono and 48 kHz stereo ECDC support in the experimental
 [Android EnCodec Player](https://github.com/HenryDelMal/Android-encodec-player).
 Live playback additionally requires manifest polling, sequence scheduling, a
 persistent decoder/audio sink, buffering, integrity checks, and discontinuity
@@ -346,8 +412,9 @@ handling. See [docs/ANDROID_COMPATIBILITY.md](docs/ANDROID_COMPATIBILITY.md).
   reduce seams but do not promise gapless audio.
 - Encoding is synchronous with no explicit backpressure queue. If it is slower
   than capture, FFmpeg blocks and live latency grows.
-- `device="auto"` uses CUDA when PyTorch reports it; `cpu` is the predictable
-  default.
+- The native Eigen runtime is CPU-only. `threads` values above 1 require CMake
+  to find OpenMP and should be benchmarked; more threads are not automatically
+  faster for every server or segment size.
 - Changing codec initialization in an existing output directory starts a fresh
   manifest window while preserving monotonically increasing filenames.
 - An endless official ECDC v0 file is impossible because its opening header
@@ -356,9 +423,11 @@ handling. See [docs/ANDROID_COMPATIBILITY.md](docs/ANDROID_COMPATIBILITY.md).
 
 ## License and attribution
 
-This service code is released under the MIT License in [LICENSE](LICENSE).
-Meta's EnCodec project, checkpoint, FFmpeg, PyTorch, torchaudio, nginx, and
-Android/ExecuTorch components retain their respective licenses. Review upstream
+This service code is released under the MIT License in [LICENSE](LICENSE). The
+native EnCodec C++ core retains its MIT notice in
+[`native/encodec/LICENSE`](native/encodec/LICENSE), and vendored Eigen retains
+its MPL-2.0 notice. Meta's EnCodec project/checkpoints, FFmpeg, PyTorch, nginx,
+and Android components retain their respective licenses. Review upstream
 licenses before redistribution.
 
 Issues and source updates belong in the

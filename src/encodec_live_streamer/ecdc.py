@@ -50,11 +50,12 @@ def parse_header(payload: bytes) -> EcdcHeader:
     return header
 
 
-def make_test_ecdc(samples: int, codebooks: int) -> bytes:
+def make_test_ecdc(
+    samples: int, codebooks: int, model: str = "encodec_48khz"
+) -> bytes:
     """Build a header-only ECDC value for tests; it is not playable audio."""
     metadata = json.dumps(
-        {"m": "encodec_48khz", "al": samples, "nc": codebooks, "lm": False},
+        {"m": model, "al": samples, "nc": codebooks, "lm": False},
         separators=(",", ":"),
     ).encode()
     return HEADER.pack(MAGIC, 0, len(metadata)) + metadata
-

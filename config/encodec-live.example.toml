@@ -11,18 +11,26 @@ input_options = []
 # input_format = "alsa"
 
 ffmpeg = "/usr/bin/ffmpeg"
-# Supported HQ targets: 3, 6, 12, or 24 kbps. These map to 2, 4, 8,
-# or 16 raw codebooks respectively.
+# C++ encoder executable and combined encoder/decoder model directory.
+native_encoder = "/opt/encodec-live-streamer/bin/encodec-live-native"
+model_dir = "/opt/encodec-live/models"
+
+# Select the official model profile by sample rate in kHz:
+# 24 = mono causal model; 48 = stereo HQ model.
+samplerate = 48
+# 48 kHz supports 3, 6, 12, or 24 kbps.
+# 24 kHz additionally supports 1.5 kbps; at 3 kbps it uses 4 codebooks.
 bandwidth_kbps = 12
-# HQ EnCodec advances by 0.99 s internally. Use an exact 0.99 s multiple to
-# avoid tiny tail frames and reduce clicks at independently encoded boundaries.
+# 3.96 s aligns with both the 48 kHz 0.99 s stride and the 24 kHz 320-sample
+# codec frame. Aligned segments reduce independently encoded boundary artifacts.
 segment_duration = 3.96
 window_segments = 8
 # Keep this many additional old files on disk to protect clients that fetched a
 # manifest immediately before it rolled forward.
 stale_grace_segments = 2
-# Use "cpu", "cuda", or "auto". CPU is the predictable server default.
-device = "cpu"
+# Native Eigen/OpenMP CPU threads. Start with 1 on a small server and benchmark.
+# Values above 1 require a build where CMake found OpenMP.
+threads = 1
 # Restart FFmpeg after EOF or an input failure and mark the next segment as a
 # discontinuity. Set false for a finite file that should end normally.
 restart_ffmpeg = true

@@ -1,5 +1,5 @@
 [Unit]
-Description=Experimental live HQ EnCodec publisher
+Description=Experimental live EnCodec publisher
 Documentation=https://github.com/HenryDelMal/encodec-live-streamer file:/opt/encodec-live-streamer/README.md
 After=network-online.target
 Wants=network-online.target
@@ -11,7 +11,6 @@ Group=encodec-live
 WorkingDirectory=/opt/encodec-live-streamer
 Environment=HOME=/opt/encodec-live-streamer
 Environment=XDG_CACHE_HOME=/opt/encodec-live-streamer/.cache
-Environment=TORCH_HOME=/opt/encodec-live-streamer/.cache/torch
 Environment=PYTHONDONTWRITEBYTECODE=1
 ReadWritePaths=/opt/encodec-live-streamer/.cache /opt/encodec-live/public
 ExecStart=/opt/encodec-live-streamer/.venv/bin/encodec-live serve --config /etc/encodec-live.toml
@@ -24,7 +23,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 LockPersonality=true
-MemoryDenyWriteExecute=false
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target

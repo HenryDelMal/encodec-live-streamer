@@ -25,17 +25,24 @@ The manifest has these fields:
 | `init` | Stream-wide codec/container information shown below. |
 | `segments` | Ordered rolling window of segment records. |
 
-`init` fixes ECDC v0, model `encodec_48khz`, 48,000 Hz, two channels, ten bits
-per codebook, configured bandwidth/codebooks, `language_model=false`, and
-`self_initializing_segments=true`. The supported mappings are 3 kbps/2
-codebooks, 6/4, 12/8, and 24/16.
+`init` fixes ECDC v0, the selected model profile, sample rate, channels, ten
+bits per codebook, configured bandwidth/codebooks, `language_model=false`, and
+`self_initializing_segments=true`.
 
-The HQ model advances its internal one-second windows by 47,520 samples (0.99
+| `samplerate` | ECDC model | Layout | Bandwidth/codebooks |
+| ---: | --- | --- | --- |
+| `24` | `encodec_24khz` | 24,000 Hz mono | 1.5/2, 3/4, 6/8, 12/16, 24/32 |
+| `48` | `encodec_48khz` | 48,000 Hz stereo | 3/2, 6/4, 12/8, 24/16 |
+
+The 48 kHz model advances its internal one-second windows by 47,520 samples (0.99
 seconds). Publishers should make independent outer segments an exact multiple
 of that stride—normally 1.98, 2.97, 3.96, or 4.95 seconds. Other positive
 durations remain valid protocol values, but an unaligned duration can create a
 tiny final model frame and a more audible boundary seam. Version 1 recommends
-3.96 seconds as the conservative default.
+3.96 seconds as the conservative default. The 24 kHz causal model advances one
+codec frame every 320 samples (1/75 second), so its outer segments should be an
+integer multiple of that interval. A 3.96-second segment is aligned for both
+profiles.
 
 Each segment record contains:
 
@@ -43,8 +50,8 @@ Each segment record contains:
 | --- | --- |
 | `sequence` | Monotonically increasing integer; never reused in an output directory. |
 | `uri` | Immutable numbered ECDC object. |
-| `duration`, `sample_count` | Exact presentation duration and stereo sample-frame count. |
-| `pts_samples` | Zero-based presentation offset within `epoch`, in 48 kHz sample frames. |
+| `duration`, `sample_count` | Exact presentation duration and sample-frame count in the selected layout. |
+| `pts_samples` | Zero-based presentation offset within `epoch`, in the selected profile's sample frames. |
 | `program_date_time` | RFC 3339 UTC estimate anchored when this FFmpeg run starts. |
 | `epoch` | UUID for one uninterrupted FFmpeg process/output timeline. |
 | `discontinuity` | `true` on the first segment after service start or FFmpeg reconnect. |
