@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -72,7 +71,10 @@ void append_u32_be(std::vector<std::uint8_t>& output, std::uint32_t value) {
 }
 
 void append_float_be(std::vector<std::uint8_t>& output, float value) {
-    append_u32_be(output, std::bit_cast<std::uint32_t>(value));
+    static_assert(sizeof(value) == sizeof(std::uint32_t));
+    std::uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    append_u32_be(output, bits);
 }
 
 void append_bytes(std::vector<std::uint8_t>& output, std::span<const std::uint8_t> input) {

@@ -7,10 +7,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+bin/
 public/
 work/
 outputs/
 encodec-live.toml
 stream.json
 segment-*.ecdc
-
