@@ -14,8 +14,10 @@ LOG = logging.getLogger(__name__)
 def command(config: Config) -> list[str]:
     result = [config.ffmpeg, "-hide_banner", "-loglevel", "warning", "-nostdin"]
     result.extend(config.input_options)
+
     if config.input_format:
         result.extend(["-f", config.input_format])
+
     result.extend(
         [
             "-i",
@@ -23,6 +25,13 @@ def command(config: Config) -> list[str]:
             "-map",
             "0:a:0",
             "-vn",
+        ]
+    )
+
+    result.extend(config.output_options)
+
+    result.extend(
+        [
             "-ac",
             str(config.channels),
             "-ar",
