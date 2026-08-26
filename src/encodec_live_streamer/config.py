@@ -142,21 +142,30 @@ class Config:
         source = pathlib.Path(path)
         with source.open("rb") as handle:
             raw = tomllib.load(handle)
+
         table: dict[str, Any] = raw.get("stream", raw)
         allowed = {field.name for field in dataclasses.fields(cls)}
         unknown = set(table) - allowed
         if unknown:
-            raise ValueError(f"unknown configuration keys: {', '.join(sorted(unknown))}")
+            raise ValueError(
+                f"unknown configuration keys: {', '.join(sorted(unknown))}"
+            )
+
         values = dict(table)
         missing = {"input", "output_dir"} - set(values)
         if missing:
-            raise ValueError(f"missing configuration keys: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"missing configuration keys: {', '.join(sorted(missing))}"
+            )
+
         values["output_dir"] = pathlib.Path(values["output_dir"])
         if "model_dir" in values:
             values["model_dir"] = pathlib.Path(values["model_dir"])
-       for name in ("input_options", "output_options"):
+
+        for name in ("input_options", "output_options"):
             if name in values:
                 if not isinstance(values[name], list):
                     raise ValueError(f"{name} must be a TOML array of strings")
                 values[name] = tuple(str(item) for item in values[name])
+
         return cls(**values).validate()
