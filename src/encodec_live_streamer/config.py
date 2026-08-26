@@ -154,8 +154,9 @@ class Config:
         values["output_dir"] = pathlib.Path(values["output_dir"])
         if "model_dir" in values:
             values["model_dir"] = pathlib.Path(values["model_dir"])
-        if "input_options" in values:
-            if not isinstance(values["input_options"], list):
-                raise ValueError("input_options must be a TOML array of strings")
-            values["input_options"] = tuple(str(item) for item in values["input_options"])
+       for name in ("input_options", "output_options"):
+            if name in values:
+                if not isinstance(values[name], list):
+                    raise ValueError(f"{name} must be a TOML array of strings")
+                values[name] = tuple(str(item) for item in values[name])
         return cls(**values).validate()
