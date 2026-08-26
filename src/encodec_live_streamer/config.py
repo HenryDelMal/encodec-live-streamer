@@ -37,6 +37,7 @@ class Config:
     title: str | None = None
     input_format: str | None = None
     input_options: tuple[str, ...] = ()
+    output_options: tuple[str, ...] = ()
     ffmpeg: str = "ffmpeg"
     native_encoder: str = "encodec-live-native"
     model_dir: pathlib.Path = pathlib.Path("/opt/encodec-live/models")
