@@ -47,7 +47,8 @@ class Config:
     window_segments: int = 8
     stale_grace_segments: int = 2
     threads: int = 1
-    beam_size: int = 8
+    beam_size: int = 1
+    refinement_passes: int = 0
     restart_ffmpeg: bool = True
     restart_delay: float = 2.0
     manifest_name: str = "stream.json"
@@ -138,6 +139,12 @@ class Config:
             or not 1 <= self.beam_size <= 64
         ):
             raise ValueError("beam_size must be an integer between 1 and 64")
+        if (
+            isinstance(self.refinement_passes, bool)
+            or not isinstance(self.refinement_passes, int)
+            or not 0 <= self.refinement_passes <= 64
+        ):
+            raise ValueError("refinement_passes must be an integer between 0 and 64")
         if self.restart_delay < 0:
             raise ValueError("restart_delay cannot be negative")
         if pathlib.Path(self.manifest_name).name != self.manifest_name:

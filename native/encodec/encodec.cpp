@@ -87,7 +87,7 @@ namespace encodec
     // >1 = beam-search RVQ encoder
     //
     // Suggested starting points: 4, 8, 16.
-    constexpr size_t RVQ_BEAM_SIZE = 8;
+    constexpr size_t RVQ_BEAM_SIZE = 1;
 
     constexpr uint32_t MODEL_CAUSAL = 1u << 0;
     constexpr uint32_t MODEL_NORMALIZED = 1u << 1;
@@ -243,8 +243,57 @@ namespace encodec
                                                CODEBOOK_SIZE, CODEBOOK_DIM);
         }
 
+        void refine(Eigen::Ref<MatrixXf> residuals, size_t nlevels, size_t refinement_passes)
+        {
+            const size_t T = static_cast<size_t>(residuals.rows());
+
+            for (size_t pass{0}; pass < refinement_passes; ++pass)
+            {
+#ifndef NDEBUG
+                const VectorXf errors_before = residuals.rowwise().squaredNorm();
+#endif
+                bool changed{false};
+
+                for (size_t l{0}; l < nlevels; ++l)
+                {
+                    auto C = codebook(l);
+
+                    // Add back the selected codeword to form
+                    // x - sum(q_i, i != l), independently for each frame.
+                    for (size_t t{0}; t < T; ++t)
+                        residuals.row(static_cast<Eigen::Index>(t)) +=
+                            C.row(codes[t*nlevels+l]);
+
+                    dists.noalias() = -2.0f * residuals * C.transpose();
+                    dists.rowwise() += Cnorms[l].transpose();
+
+                    for (size_t t{0}; t < T; ++t)
+                    {
+                        Eigen::Index best_idx{0};
+                        dists.row(static_cast<Eigen::Index>(t)).minCoeff(&best_idx);
+                        auto& selected = codes[t*nlevels+l];
+                        changed |= selected != static_cast<uint16_t>(best_idx);
+                        selected = static_cast<uint16_t>(best_idx);
+                        residuals.row(static_cast<Eigen::Index>(t)) -= C.row(best_idx);
+                    }
+                }
+
+#ifndef NDEBUG
+                const VectorXf errors_after = residuals.rowwise().squaredNorm();
+                for (size_t t{0}; t < T; ++t)
+                {
+                    const float before = errors_before(static_cast<Eigen::Index>(t));
+                    const float tolerance = 1.0e-5f * (1.0f + before);
+                    assert(errors_after(static_cast<Eigen::Index>(t)) <= before + tolerance);
+                }
+#endif
+                if (!changed) break;
+            }
+        }
+
         std::span<const uint8_t> encode(std::span<float> feats, size_t nlevels,
-                                        size_t beam_size = RVQ_BEAM_SIZE)
+                                        size_t beam_size = RVQ_BEAM_SIZE,
+                                        size_t refinement_passes = 0)
         {
             // RVQ Encode
             const size_t T = feats.size() / CODEBOOK_DIM;
@@ -276,6 +325,8 @@ namespace encodec
                     }
                 }
 
+                if (refinement_passes > 0)
+                    refine(X, nlevels, refinement_passes);
                 pack_codes(codes, codes_packed);
                 return codes_packed;
             }
@@ -308,8 +359,8 @@ namespace encodec
             MatrixXf next_residuals;
             MatrixXf beam_dists;
 
-            std::vector<std::vector<uint16_t>> paths;
-            std::vector<std::vector<uint16_t>> next_paths;
+            MatrixXu16 paths;
+            MatrixXu16 next_paths;
             std::vector<beam_candidate> candidates;
 
             for (size_t t{0}; t < T; ++t)
@@ -317,9 +368,7 @@ namespace encodec
                 residuals.resize(1, CODEBOOK_DIM);
                 residuals.row(0) = X.row(t);
 
-                paths.clear();
-                paths.resize(1);
-                paths[0].reserve(nlevels);
+                paths.resize(1, static_cast<Eigen::Index>(nlevels));
 
                 for (size_t l{0}; l < nlevels; ++l)
                 {
@@ -342,25 +391,13 @@ namespace encodec
 
                     beam_dists.colwise() += residual_norms;
 
-                    candidates.clear();
-                    candidates.reserve(active_beams * CODEBOOK_SIZE);
+                    const size_t keep = std::min(beam_size,
+                                                 active_beams * CODEBOOK_SIZE);
 
-                    for (size_t b{0}; b < active_beams; ++b)
-                    {
-                        for (size_t c{0}; c < CODEBOOK_SIZE; ++c)
-                        {
-                            candidates.push_back({
-                                beam_dists(static_cast<Eigen::Index>(b),
-                                           static_cast<Eigen::Index>(c)),
-                                b,
-                                static_cast<uint16_t>(c)
-                            });
-                        }
-                    }
-
-                    const size_t keep = std::min(beam_size, candidates.size());
-
-                    // Deterministic tie-breaking makes repeated encodes stable.
+                    // Retain only the best K candidates while scanning the
+                    // distance matrix. The heap root is the worst retained
+                    // candidate, so memory is O(beam_size), not
+                    // O(beam_size * CODEBOOK_SIZE).
                     const auto better = [](const beam_candidate& a,
                                            const beam_candidate& b)
                     {
@@ -371,21 +408,41 @@ namespace encodec
                         return a.code < b.code;
                     };
 
-                    if (keep < candidates.size())
+                    candidates.clear();
+                    candidates.reserve(keep);
+
+                    for (size_t b{0}; b < active_beams; ++b)
                     {
-                        std::nth_element(candidates.begin(),
-                                         candidates.begin() + keep,
-                                         candidates.end(),
-                                         better);
-                        candidates.resize(keep);
+                        for (size_t c{0}; c < CODEBOOK_SIZE; ++c)
+                        {
+                            const beam_candidate candidate{
+                                beam_dists(static_cast<Eigen::Index>(b),
+                                           static_cast<Eigen::Index>(c)),
+                                b,
+                                static_cast<uint16_t>(c)
+                            };
+
+                            if (candidates.size() < keep)
+                            {
+                                candidates.push_back(candidate);
+                                std::push_heap(candidates.begin(), candidates.end(), better);
+                            }
+                            else if (better(candidate, candidates.front()))
+                            {
+                                std::pop_heap(candidates.begin(), candidates.end(), better);
+                                candidates.back() = candidate;
+                                std::push_heap(candidates.begin(), candidates.end(), better);
+                            }
+                        }
                     }
 
+                    // Deterministic tie-breaking makes repeated encodes stable.
                     std::sort(candidates.begin(), candidates.end(), better);
 
                     next_residuals.resize(static_cast<Eigen::Index>(keep),
                                           CODEBOOK_DIM);
-                    next_paths.clear();
-                    next_paths.resize(keep);
+                    next_paths.resize(static_cast<Eigen::Index>(keep),
+                                      static_cast<Eigen::Index>(nlevels));
 
                     for (size_t b{0}; b < keep; ++b)
                     {
@@ -395,8 +452,13 @@ namespace encodec
                             residuals.row(static_cast<Eigen::Index>(candidate.parent))
                             - C.row(candidate.code);
 
-                        next_paths[b] = paths[candidate.parent];
-                        next_paths[b].push_back(candidate.code);
+                        if (l > 0)
+                            next_paths.row(static_cast<Eigen::Index>(b)).head(
+                                static_cast<Eigen::Index>(l)) =
+                                paths.row(static_cast<Eigen::Index>(candidate.parent)).head(
+                                    static_cast<Eigen::Index>(l));
+                        next_paths(static_cast<Eigen::Index>(b),
+                                   static_cast<Eigen::Index>(l)) = candidate.code;
                     }
 
                     residuals.swap(next_residuals);
@@ -405,14 +467,16 @@ namespace encodec
 
                 // Candidates were sorted at every stage, therefore beam 0 has
                 // the smallest final residual norm.
-                const auto& best_path = paths.front();
                 for (size_t l{0}; l < nlevels; ++l)
-                    codes[t*nlevels+l] = best_path[l];
+                    codes[t*nlevels+l] = paths(0, static_cast<Eigen::Index>(l));
 
                 // Preserve the original function's side effect: `feats`
                 // contains the final RVQ residual after encoding.
                 X.row(t) = residuals.row(0);
             }
+
+            if (refinement_passes > 0)
+                refine(X, nlevels, refinement_passes);
 
             // Packet structure is unchanged: the selected indices are packed
             // exactly as before (10 bits per codebook index).
@@ -991,7 +1055,8 @@ namespace encodec
         }
 
         encoded_frame encode_frame(std::span<const float> audio, unsigned int num_quantizers,
-                                   size_t beam_size = RVQ_BEAM_SIZE)
+                                   size_t beam_size = RVQ_BEAM_SIZE,
+                                   size_t refinement_passes = 0)
         {
             (void)cpu_threads();
             if (num_quantizers < 1 || num_quantizers > model_info_.max_quantizers)
@@ -1028,13 +1093,14 @@ namespace encodec
             x      = b5(x);
             x      = b6(a6(x));
             const size_t code_frames = x.size() / CODEBOOK_DIM;
-            return {rvq_.encode(x, num_quantizers, beam_size), code_frames, scale};
+            return {rvq_.encode(x, num_quantizers, beam_size, refinement_passes), code_frames, scale};
         }
 
         std::span<const uint8_t> encode(std::span<const float> audio, unsigned int num_quantizers,
-                                        size_t beam_size = RVQ_BEAM_SIZE)
+                                        size_t beam_size = RVQ_BEAM_SIZE,
+                                        size_t refinement_passes = 0)
         {
-            return encode_frame(audio, num_quantizers, beam_size).packet;
+            return encode_frame(audio, num_quantizers, beam_size, refinement_passes).packet;
         }
     };
 
@@ -1144,6 +1210,14 @@ namespace encodec
         return state->encode(audio, num_quantizers, beam_size);
     }
 
+    std::span<const uint8_t> encoder::encode(std::span<const float> audio,
+                                             unsigned int num_quantizers,
+                                             std::size_t beam_size,
+                                             std::size_t refinement_passes)
+    {
+        return state->encode(audio, num_quantizers, beam_size, refinement_passes);
+    }
+
     encoded_frame encoder::encode_frame(std::span<const float> audio, unsigned int num_quantizers)
     {
         return state->encode_frame(audio, num_quantizers);
@@ -1154,6 +1228,14 @@ namespace encodec
                                         std::size_t beam_size)
     {
         return state->encode_frame(audio, num_quantizers, beam_size);
+    }
+
+    encoded_frame encoder::encode_frame(std::span<const float> audio,
+                                        unsigned int num_quantizers,
+                                        std::size_t beam_size,
+                                        std::size_t refinement_passes)
+    {
+        return state->encode_frame(audio, num_quantizers, beam_size, refinement_passes);
     }
 
     model_info encoder::info() const { return state->model_info_; }

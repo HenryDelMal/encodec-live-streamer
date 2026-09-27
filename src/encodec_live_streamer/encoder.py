@@ -33,6 +33,8 @@ def native_command(config: Config, *, check_model: bool = False) -> list[str]:
         str(config.threads),
         "--beam-size",
         str(config.beam_size),
+        "--refinement-passes",
+        str(config.refinement_passes),
     ]
     if check_model:
         result.append("--check-model")
@@ -45,11 +47,13 @@ class EncodecEncoder:
     def __init__(self, config: Config) -> None:
         argv = native_command(config)
         LOG.info(
-            "starting C++ EnCodec encoder model=%s bandwidth=%g kbps threads=%s beam_size=%s",
+            "starting C++ EnCodec encoder model=%s bandwidth=%g kbps threads=%s "
+            "beam_size=%s refinement_passes=%s",
             config.model,
             config.bandwidth_kbps,
             config.threads,
             config.beam_size,
+            config.refinement_passes,
         )
         self.config = config
         self.process = subprocess.Popen(

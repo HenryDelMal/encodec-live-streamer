@@ -68,7 +68,8 @@ Select a complete codec profile using `samplerate` in TOML—not a model name:
 samplerate = 24
 bandwidth_kbps = 3
 threads = 1
-beam_size = 8
+beam_size = 1
+refinement_passes = 0
 ```
 
 The 24 kHz model supports 1.5, 3, 6, 12, and 24 kbps. At 3 kbps it
@@ -79,11 +80,18 @@ from this single setting.
 
 `beam_size` controls the residual-vector-quantizer search width. `1` selects
 the original greedy encoder and is the fastest choice; larger values search
-more candidates and can improve code selection at substantial CPU cost. The
-default is `8`, matching `encodec.cpp`; supported values are `1` through `64`.
-This setting changes encoder effort only—it does not change the ECDC format or
-require an Android decoder change. On small servers, benchmark `1`, `4`, and
-`8` while checking that encoding remains faster than real time.
+more candidates and can improve code selection at substantial CPU cost.
+`refinement_passes` applies coordinate-descent optimization after that initial
+selection and stops early when a complete pass changes no indices. Zero
+disables refinement; `1` or `2` are practical values to test. The defaults are
+`beam_size = 1` and `refinement_passes = 0`, matching `encodec.cpp` and selecting
+the original greedy path. Both accept values through `64`, though large values
+can be prohibitively expensive.
+
+These settings change encoder effort only: they do not change bitrate, packet
+layout, ECDC compatibility, or require an Android decoder change. On small
+servers, first establish real-time operation with the defaults, then benchmark
+refinement and wider beams separately.
 
 The 48 kHz EnCodec model uses one-second internal windows with a 47,520-sample
 stride: exactly **0.99 seconds at 48 kHz**. Independent outer segments should be
