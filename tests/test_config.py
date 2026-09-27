@@ -15,8 +15,6 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.sample_rate, 48_000)
             self.assertEqual(config.channels, 2)
             self.assertEqual(config.codebooks, 8)
-            self.assertEqual(config.beam_size, 1)
-            self.assertEqual(config.refinement_passes, 0)
             self.assertTrue(config.segment_is_aligned)
 
     def test_24khz_3kbps_profile(self) -> None:
@@ -82,7 +80,7 @@ class ConfigTests(unittest.TestCase):
                     input="x", output_dir=Path(directory), samplerate=48, bandwidth_kbps=1.5
                 ).validate()
 
-    def test_rejects_invalid_encoder_tuning(self) -> None:
+    def test_rejects_invalid_samplerate_threads_and_beam_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "samplerate"):
                 Config(input="x", output_dir=Path(directory), samplerate=32).validate()
@@ -91,25 +89,14 @@ class ConfigTests(unittest.TestCase):
             for value in (0, 65, True):
                 with self.assertRaisesRegex(ValueError, "beam_size"):
                     Config(input="x", output_dir=Path(directory), beam_size=value).validate()
-            for value in (-1, 65, True):
-                with self.assertRaisesRegex(ValueError, "refinement_passes"):
-                    Config(
-                        input="x",
-                        output_dir=Path(directory),
-                        refinement_passes=value,
-                    ).validate()
 
     def test_native_command_includes_beam_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Config(
-                input="x",
-                output_dir=Path(directory),
-                beam_size=4,
-                refinement_passes=2,
+                input="x", output_dir=Path(directory), beam_size=4
             ).validate()
             argv = native_command(config)
             self.assertEqual(argv[argv.index("--beam-size") + 1], "4")
-            self.assertEqual(argv[argv.index("--refinement-passes") + 1], "2")
 
     def test_toml_reports_missing_required_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

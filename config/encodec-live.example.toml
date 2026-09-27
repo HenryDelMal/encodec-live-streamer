@@ -35,11 +35,8 @@ stale_grace_segments = 2
 # Values above 1 require a build where CMake found OpenMP.
 threads = 1
 # RVQ search width: 1 is the fastest greedy encoder; larger values may improve
-# code selection at substantial CPU cost.
-beam_size = 1
-# Optional coordinate-descent passes after greedy/beam selection. Zero disables
-# refinement; start with 1 or 2 and verify that encoding remains real-time.
-refinement_passes = 0
+# code selection at substantial CPU cost. Upstream defaults to 8.
+beam_size = 8
 # Restart FFmpeg after EOF or an input failure and mark the next segment as a
 # discontinuity. Set false for a finite file that should end normally.
 restart_ffmpeg = true
