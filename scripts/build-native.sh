@@ -6,6 +6,14 @@ BUILD_DIR=${BUILD_DIR:-"$PROJECT_DIR/build/native"}
 INSTALL_PREFIX=${INSTALL_PREFIX:-"$PROJECT_DIR"}
 ENCODEC_CPP_DIR=${ENCODEC_CPP_DIR:-"$BUILD_DIR/upstream/encodec.cpp"}
 ENCODEC_CPP_UPDATE=${ENCODEC_CPP_UPDATE:-1}
+BUILD_JOBS=${BUILD_JOBS:-1}
+
+case "$BUILD_JOBS" in
+    ''|*[!0-9]*|0)
+        echo "BUILD_JOBS must be a positive integer" >&2
+        exit 2
+        ;;
+esac
 
 # CMake caches absolute source/build paths. Keep the managed upstream checkout,
 # but discard only CMake-generated state when an installation was copied or
@@ -50,7 +58,7 @@ cmake -S "$PROJECT_DIR/native" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
     -DENCODEC_CPP_SOURCE_DIR="$ENCODEC_CPP_DIR"
-cmake --build "$BUILD_DIR" --parallel
+cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
 cmake --install "$BUILD_DIR"
 
 echo "Installed native worker: $INSTALL_PREFIX/bin/encodec-live-native"

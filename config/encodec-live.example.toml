@@ -34,6 +34,9 @@ stale_grace_segments = 2
 # Native Eigen/OpenMP CPU threads. Start with 1 on a small server and benchmark.
 # Values above 1 require a build where CMake found OpenMP.
 threads = 1
+# RVQ search width: 1 is the fastest greedy encoder; larger values may improve
+# code selection at substantial CPU cost. Upstream defaults to 8.
+beam_size = 8
 # Restart FFmpeg after EOF or an input failure and mark the next segment as a
 # discontinuity. Set false for a finite file that should end normally.
 restart_ffmpeg = true

@@ -68,6 +68,7 @@ Select a complete codec profile using `samplerate` in TOML—not a model name:
 samplerate = 24
 bandwidth_kbps = 3
 threads = 1
+beam_size = 8
 ```
 
 The 24 kHz model supports 1.5, 3, 6, 12, and 24 kbps. At 3 kbps it
@@ -75,6 +76,14 @@ uses four codebooks. The 48 kHz model supports 3, 6, 12, and 24 kbps, mapping
 to 2, 4, 8, and 16 codebooks. Sample rate, channel count, FFmpeg output,
 model file, ECDC header, timestamps, and manifest initialization are derived
 from this single setting.
+
+`beam_size` controls the residual-vector-quantizer search width. `1` selects
+the original greedy encoder and is the fastest choice; larger values search
+more candidates and can improve code selection at substantial CPU cost. The
+default is `8`, matching `encodec.cpp`; supported values are `1` through `64`.
+This setting changes encoder effort only—it does not change the ECDC format or
+require an Android decoder change. On small servers, benchmark `1`, `4`, and
+`8` while checking that encoding remains faster than real time.
 
 The 48 kHz EnCodec model uses one-second internal windows with a 47,520-sample
 stride: exactly **0.99 seconds at 48 kHz**. Independent outer segments should be
@@ -148,6 +157,14 @@ upstream repository.
 CMake cache files contain absolute paths. If an installation directory is
 copied or renamed, `build-native.sh` detects the relocated cache and regenerates
 only the CMake state while retaining the managed `encodec.cpp` checkout.
+
+Native compilation defaults to one build job because optimizing the Eigen-heavy
+translation unit can use substantial memory. Machines with sufficient RAM can
+opt in to more build concurrency without changing runtime encoder threads:
+
+```bash
+BUILD_JOBS=2 ./scripts/build-native.sh
+```
 
 ### Upgrading an existing installation
 

@@ -22,6 +22,7 @@ struct options {
     unsigned samplerate_khz{};
     unsigned codebooks{};
     unsigned threads{1};
+    unsigned beam_size{8};
     bool check_model{};
 };
 
@@ -47,6 +48,7 @@ options parse_options(int argc, char** argv) {
         else if (argument == "--samplerate") result.samplerate_khz = parse_unsigned(value, argument);
         else if (argument == "--codebooks") result.codebooks = parse_unsigned(value, argument);
         else if (argument == "--threads") result.threads = parse_unsigned(value, argument);
+        else if (argument == "--beam-size") result.beam_size = parse_unsigned(value, argument);
         else throw std::runtime_error("Unknown argument: " + std::string(argument));
     }
     if (result.model_path.empty()) throw std::runtime_error("--model is required");
@@ -54,6 +56,8 @@ options parse_options(int argc, char** argv) {
         throw std::runtime_error("--samplerate must be 24 or 48");
     if (result.codebooks == 0) throw std::runtime_error("--codebooks must be positive");
     if (result.threads == 0) throw std::runtime_error("--threads must be positive");
+    if (result.beam_size == 0 || result.beam_size > 64)
+        throw std::runtime_error("--beam-size must be between 1 and 64");
     return result;
 }
 
@@ -98,11 +102,12 @@ std::vector<std::uint8_t> ecdc_header(const encodec::model_info& info,
 std::vector<std::uint8_t> encode_segment(encodec::encoder& encoder,
                                          const encodec::model_info& info,
                                          std::span<const float> audio,
-                                         unsigned codebooks) {
+                                         unsigned codebooks,
+                                         unsigned beam_size) {
     const std::size_t sample_frames = audio.size() / info.channels;
     auto output = ecdc_header(info, sample_frames, codebooks);
     if (info.sample_rate == 24'000) {
-        const auto frame = encoder.encode_frame(audio, codebooks);
+        const auto frame = encoder.encode_frame(audio, codebooks, beam_size);
         append_bytes(output, frame.packet);
         return output;
     }
@@ -111,7 +116,7 @@ std::vector<std::uint8_t> encode_segment(encodec::encoder& encoder,
         const std::size_t length = std::min(HQ_FRAME_SAMPLES, sample_frames - offset);
         const auto begin = audio.data() + offset * info.channels;
         const auto frame = encoder.encode_frame(
-            std::span<const float>{begin, length * info.channels}, codebooks);
+            std::span<const float>{begin, length * info.channels}, codebooks, beam_size);
         append_float_be(output, frame.scale);
         append_bytes(output, frame.packet);
     }
@@ -154,7 +159,8 @@ int main(int argc, char** argv) {
         if (arguments.check_model) {
             std::cout << "native model: " << info.sample_rate << " Hz, " << info.channels
                       << " channel(s), " << arguments.codebooks << " codebooks, threads="
-                      << encodec::get_num_threads() << '\n';
+                      << encodec::get_num_threads() << ", beam_size="
+                      << arguments.beam_size << '\n';
             return 0;
         }
 
@@ -169,7 +175,8 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Invalid PCM request size");
             std::vector<float> audio(byte_count / sizeof(float));
             read_exact(reinterpret_cast<char*>(audio.data()), byte_count);
-            write_response(encode_segment(encoder, info, audio, arguments.codebooks));
+            write_response(encode_segment(
+                encoder, info, audio, arguments.codebooks, arguments.beam_size));
         }
     } catch (const std::exception& error) {
         std::cerr << "encodec-live-native: " << error.what() << '\n';

@@ -26,8 +26,8 @@ namespace encodec
 
 //----------------------------------------------------------------------------------------------------------------
 
-    unsigned int get_encodec_bps(unsigned int num_quantizers, unsigned int sample_rate);
-    unsigned int get_encoded_nquantizers(unsigned int bps, unsigned int sample_rate);
+    unsigned int get_encodec_bps(unsigned int num_quantizers);
+    unsigned int get_encoded_nquantizers(unsigned int bps);
     void set_num_threads(unsigned int threads);
     unsigned int get_num_threads();
 
@@ -47,7 +47,11 @@ namespace encodec
         encoder& operator=(encoder&& other);
 
         std::span<const uint8_t> encode(std::span<const float> audio, unsigned int num_quantizers);
+        std::span<const uint8_t> encode(std::span<const float> audio, unsigned int num_quantizers,
+                                        std::size_t beam_size);
         encoded_frame encode_frame(std::span<const float> audio, unsigned int num_quantizers);
+        encoded_frame encode_frame(std::span<const float> audio, unsigned int num_quantizers,
+                                   std::size_t beam_size);
         model_info info() const;
     };
 

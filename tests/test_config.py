@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from encodec_live_streamer.config import Config
+from encodec_live_streamer.encoder import native_command
 from encodec_live_streamer.ffmpeg import command
 
 
@@ -79,12 +80,23 @@ class ConfigTests(unittest.TestCase):
                     input="x", output_dir=Path(directory), samplerate=48, bandwidth_kbps=1.5
                 ).validate()
 
-    def test_rejects_invalid_samplerate_and_threads(self) -> None:
+    def test_rejects_invalid_samplerate_threads_and_beam_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "samplerate"):
                 Config(input="x", output_dir=Path(directory), samplerate=32).validate()
             with self.assertRaisesRegex(ValueError, "threads"):
                 Config(input="x", output_dir=Path(directory), threads=0).validate()
+            for value in (0, 65, True):
+                with self.assertRaisesRegex(ValueError, "beam_size"):
+                    Config(input="x", output_dir=Path(directory), beam_size=value).validate()
+
+    def test_native_command_includes_beam_size(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(
+                input="x", output_dir=Path(directory), beam_size=4
+            ).validate()
+            argv = native_command(config)
+            self.assertEqual(argv[argv.index("--beam-size") + 1], "4")
 
     def test_toml_reports_missing_required_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
