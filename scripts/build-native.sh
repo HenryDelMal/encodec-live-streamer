@@ -7,6 +7,30 @@ INSTALL_PREFIX=${INSTALL_PREFIX:-"$PROJECT_DIR"}
 ENCODEC_CPP_DIR=${ENCODEC_CPP_DIR:-"$BUILD_DIR/upstream/encodec.cpp"}
 ENCODEC_CPP_UPDATE=${ENCODEC_CPP_UPDATE:-1}
 
+# CMake caches absolute source/build paths. Keep the managed upstream checkout,
+# but discard only CMake-generated state when an installation was copied or
+# moved to another directory.
+if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+    CACHED_SOURCE=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' \
+        "$BUILD_DIR/CMakeCache.txt")
+    CACHED_BUILD=$(sed -n 's/^CMAKE_CACHEFILE_DIR:INTERNAL=//p' \
+        "$BUILD_DIR/CMakeCache.txt")
+    if [ "$CACHED_SOURCE" != "$PROJECT_DIR/native" ] || \
+       [ "$CACHED_BUILD" != "$BUILD_DIR" ]; then
+        echo "Discarding relocated CMake cache from ${CACHED_SOURCE:-unknown}" >&2
+        cmake -E remove_directory "$BUILD_DIR/CMakeFiles"
+        cmake -E remove \
+            "$BUILD_DIR/CMakeCache.txt" \
+            "$BUILD_DIR/Makefile" \
+            "$BUILD_DIR/build.ninja" \
+            "$BUILD_DIR/cmake_install.cmake" \
+            "$BUILD_DIR/install_manifest.txt" \
+            "$BUILD_DIR/rules.ninja" \
+            "$BUILD_DIR/.ninja_deps" \
+            "$BUILD_DIR/.ninja_log"
+    fi
+fi
+
 if [ "$ENCODEC_CPP_UPDATE" = 1 ]; then
     ENCODEC_CPP_REVISION=$(
         "$PROJECT_DIR/scripts/update-encodec-cpp.sh" "$ENCODEC_CPP_DIR"

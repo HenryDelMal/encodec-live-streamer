@@ -145,6 +145,10 @@ For an intentionally offline rebuild, retain the managed checkout under the
 build directory and use `ENCODEC_CPP_UPDATE=0`. Normal builds always check the
 upstream repository.
 
+CMake cache files contain absolute paths. If an installation directory is
+copied or renamed, `build-native.sh` detects the relocated cache and regenerates
+only the CMake state while retaining the managed `encodec.cpp` checkout.
+
 ### Upgrading an existing installation
 
 Version 0.2 replaces the Python/PyTorch runtime encoder. Re-run
