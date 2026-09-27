@@ -112,16 +112,38 @@ selected profile, and the running service logs a warning when it is not.
 
 - A recent mainstream Linux distribution using systemd for the supplied unit.
 - Python 3.9 or newer.
-- A C++20 compiler, CMake, FFmpeg, and Python virtual-environment support.
+- A C++20 compiler, CMake, Git, FFmpeg, and Python virtual-environment support.
 - nginx or another static HTTP server if clients need network access.
 - Sufficient CPU/RAM for the selected neural model. Real-time performance is not
   guaranteed; measure it on the intended server.
-- Internet access while preparing the official checkpoints. PyTorch is used in
-  a temporary model-export environment and removed afterward.
+- Internet access for native builds and while preparing the official
+  checkpoints. PyTorch is used in a temporary model-export environment and
+  removed afterward.
 
 The runtime model format contains both encoder and decoder weights. This lets the
 same C++ core support Linux encoding and Android decoding while keeping large
 model files outside Git.
+
+### encodec.cpp updates
+
+Every `scripts/build-native.sh` run fetches the current `main` revision from
+[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp) into the
+ignored native build directory before compiling. The exact commit is printed
+and recorded in `build/native/encodec-cpp-revision.txt`. A failed fetch stops
+the build instead of silently compiling an older dependency.
+
+Tracking a moving branch is convenient but not reproducible and means a future
+upstream change can break a build. To reproduce or qualify a specific upstream
+revision, set a tag or commit explicitly:
+
+```bash
+ENCODEC_CPP_REF=f9263fb4e781d7ac855f83660935c8d9868231a8 \
+  ./scripts/build-native.sh
+```
+
+For an intentionally offline rebuild, retain the managed checkout under the
+build directory and use `ENCODEC_CPP_UPDATE=0`. Normal builds always check the
+upstream repository.
 
 ### Upgrading an existing installation
 
@@ -377,9 +399,12 @@ make test
 Compile the native worker as part of verification:
 
 ```bash
-cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
-cmake --build build/native --parallel
+make native
 ```
+
+This checks for the latest `encodec.cpp` revision and therefore requires
+network access. The lower-level CMake project still accepts
+`ENCODEC_CPP_SOURCE_DIR` for controlled or offline builds.
 
 Before publishing a repository:
 
@@ -434,11 +459,14 @@ handling. See [docs/ANDROID_COMPATIBILITY.md](docs/ANDROID_COMPATIBILITY.md).
 ## License and attribution
 
 This service code is released under the MIT License in [LICENSE](LICENSE). The
-native EnCodec C++ core retains its MIT notice in
-[`native/encodec/LICENSE`](native/encodec/LICENSE), and vendored Eigen retains
-its MPL-2.0 notice. Meta's EnCodec project/checkpoints, FFmpeg, PyTorch, nginx,
-and Android components retain their respective licenses. Review upstream
-licenses before redistribution.
+native EnCodec C++ core is fetched from
+[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp) for each
+normal build and retains its MIT license; the repository also keeps the prior
+snapshot and its notice in [`native/encodec/LICENSE`](native/encodec/LICENSE)
+for explicit offline use. Vendored Eigen retains its MPL-2.0 notice. Meta's
+EnCodec project/checkpoints, FFmpeg, PyTorch, nginx, and Android components
+retain their respective licenses. Review upstream licenses before
+redistribution.
 
 Issues and source updates belong in the
 [GitHub repository](https://github.com/HenryDelMal/encodec-live-streamer).

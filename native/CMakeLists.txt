@@ -2,18 +2,32 @@ cmake_minimum_required(VERSION 3.16)
 project(encodec_live_native LANGUAGES CXX)
 
 option(ENCODEC_ENABLE_OPENMP "Enable Eigen/OpenMP encoder threading" ON)
+set(
+    ENCODEC_CPP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/encodec"
+    CACHE PATH "Path to an encodec.cpp checkout or the bundled offline snapshot"
+)
+
+if(EXISTS "${ENCODEC_CPP_SOURCE_DIR}/src/lib/encodec.cpp")
+    set(ENCODEC_CPP_SOURCE "${ENCODEC_CPP_SOURCE_DIR}/src/lib/encodec.cpp")
+    set(ENCODEC_CPP_INCLUDE_DIR "${ENCODEC_CPP_SOURCE_DIR}/src/lib")
+elseif(EXISTS "${ENCODEC_CPP_SOURCE_DIR}/encodec.cpp")
+    set(ENCODEC_CPP_SOURCE "${ENCODEC_CPP_SOURCE_DIR}/encodec.cpp")
+    set(ENCODEC_CPP_INCLUDE_DIR "${ENCODEC_CPP_SOURCE_DIR}")
+else()
+    message(FATAL_ERROR "encodec.cpp source not found in ${ENCODEC_CPP_SOURCE_DIR}")
+endif()
 
 add_executable(
     encodec-live-native
     worker.cpp
-    encodec/encodec.cpp
+    "${ENCODEC_CPP_SOURCE}"
 )
 target_compile_features(encodec-live-native PRIVATE cxx_std_20)
 target_compile_definitions(encodec-live-native PRIVATE ENCODEC_RUNTIME_MODELS_ONLY=1)
 target_include_directories(
     encodec-live-native
     PRIVATE
-    encodec
+    "${ENCODEC_CPP_INCLUDE_DIR}"
     third_party/eigen
 )
 target_compile_options(
@@ -21,7 +35,9 @@ target_compile_options(
     PRIVATE
     -O3 -ffunction-sections -fdata-sections
 )
-if(NOT APPLE)
+if(APPLE)
+    target_link_options(encodec-live-native PRIVATE -Wl,-dead_strip)
+else()
     target_link_options(encodec-live-native PRIVATE -Wl,--gc-sections)
 endif()
 

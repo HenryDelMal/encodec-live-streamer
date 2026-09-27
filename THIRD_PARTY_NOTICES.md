@@ -8,12 +8,15 @@ distributed under its MIT license. Model weights are not committed here.
 
 ## encodec.cpp
 
-The portable native encoder/decoder is derived from
-[pfeatherstone/encodec.cpp](https://github.com/pfeatherstone/encodec.cpp) and
-the dual-model work used by
-[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp). It is
-distributed under the MIT License; the complete notice is included at
-`native/encodec/LICENSE`.
+Normal builds fetch the latest `main` revision of the portable native
+encoder/decoder from
+[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp). That work
+is derived from
+[pfeatherstone/encodec.cpp](https://github.com/pfeatherstone/encodec.cpp) and is
+distributed under the MIT License. The previous local snapshot remains as an
+explicit offline fallback, with its complete notice at
+`native/encodec/LICENSE`. The fetched checkout also contains its current
+upstream license.
 
 ## Eigen
 
