@@ -376,8 +376,9 @@ http://SERVER:8080/encodec/stream.json
 http://SERVER:8080/encodec/stream.pb
 ```
 
-`stream.json` is minified UTF-8 JSON for current clients. `stream.pb` is the
-binary Protocol Buffers form of the same snapshot; its schema is in
+`stream.json` is minified UTF-8 JSON for current clients. `stream.pb` is a
+compact Protocol Buffers representation of the same segment window (schema
+version 2); its schema is in
 [`proto/stream.proto`](proto/stream.proto). Both manifests disable caching.
 
 Install it after reviewing the listen address, hostname, and TLS requirements:

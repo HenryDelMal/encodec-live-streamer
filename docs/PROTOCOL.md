@@ -6,16 +6,23 @@ The manifest media type is `application/vnd.encodec.live+json`.
 
 ## Transport objects
 
-`stream.json` is an atomically replaced, minified UTF-8 JSON document. The
-publisher also writes `stream.pb`, an atomically replaced binary Protocol
-Buffers encoding of the same manifest snapshot. Both files use `no-store`
-caching and contain the same fields and segment window. The protobuf schema is
-[`proto/stream.proto`](../proto/stream.proto); clients can generate language
-bindings from it. Each segment URI
-names an atomically published, complete Meta ECDC version-0 file. A client must
-resolve relative segment URIs against the manifest URL. Every segment is
-independently decodable and contains its own initialization header. Language
-model entropy coding is always disabled.
+`stream.json` is an atomically replaced, minified UTF-8 JSON document using
+protocol version 1. The publisher also writes `stream.pb`, an atomically
+replaced compact Protocol Buffers manifest using schema version 2. Both files
+describe the same segment window and use `no-store` caching. The protobuf schema
+is [`proto/stream.proto`](../proto/stream.proto).
+
+The protobuf layout omits data clients can derive. `media_sequence` plus the
+flattened order of segments gives each sequence number; the URI is
+`segment-%012d.ecdc` using that sequence. `segment_duration_samples` is fixed
+for all segments in the manifest. The ECDC header supplies sample rate, model,
+channels, codebooks, and LM state, so the client computes duration in seconds
+from the fixed sample count and the sample rate in the first segment header.
+The ECDC header also supplies actual audio length. Epoch groups carry one
+numeric `epoch_start_unix_ms` and a discontinuity flag for their first segment.
+Each segment stores only byte length and CRC-32C (Castagnoli) of its complete
+ECDC file. Every ECDC segment is independently decodable and has its own
+initialization header; language-model entropy coding is disabled.
 
 The manifest has these fields:
 
@@ -31,10 +38,11 @@ The manifest has these fields:
 | `init` | Stream-wide codec/container information shown below. |
 | `segments` | Ordered rolling window of segment records. |
 
-The protobuf field numbers map one-to-one to the JSON fields. `title` is
-optional in both encodings and remains absent when not configured. The two
-files are atomically replaced individually, so a client polling both should
-use the `updated_at` value to detect whether they represent the same snapshot.
+`title` is optional in both encodings and remains absent when not configured.
+The files are atomically replaced individually. If a client compares both,
+match their `media_sequence`, segment count, and title. Protobuf schema version
+2 is wire-incompatible with the earlier protobuf draft; clients should
+regenerate bindings from the current schema and check `schema_version`.
 
 Clients must ignore unknown manifest fields. The optional `title` field is an
 additive version-1 extension: publishers do not emit it unless configured, and
@@ -69,6 +77,7 @@ Each segment record contains:
 | `pts_samples` | Zero-based presentation offset within `epoch`, in the selected profile's sample frames. |
 | `program_date_time` | RFC 3339 UTC estimate anchored when this FFmpeg run starts. |
 | `epoch` | UUID for one uninterrupted FFmpeg process/output timeline. |
+| `epoch_start_unix_ms` | Numeric start timestamp used as the protobuf epoch-group identifier. |
 | `discontinuity` | `true` on the first segment after service start or FFmpeg reconnect. |
 | `byte_length`, `sha256` | Integrity and completeness checks for the ECDC object. |
 
@@ -79,12 +88,12 @@ not recovered input PTS. A new epoch makes that loss of continuity explicit.
 ## Client algorithm
 
 Poll the manifest without caching, initially select a segment a small number of
-entries behind the live edge, then fetch segments by increasing sequence. Check
-the byte length and optionally SHA-256 before decoding. A missing expected
-sequence or a changed epoch/discontinuity marker requires flushing decoder/audio
-timing state and rebuffering. Do not concatenate ECDC files and parse them as a
-single ECDC file; open each segment independently and keep one audio output sink
-alive across segment boundaries.
+entries behind the live edge, then fetch segments by increasing sequence. For
+JSON, check the byte length and optionally SHA-256. For protobuf, check the byte
+length and CRC-32C. A missing expected sequence or an epoch/discontinuity change
+requires flushing decoder/audio timing state and rebuffering. Do not concatenate
+ECDC files and parse them as one ECDC file; open each segment independently and
+keep one audio output sink alive across segment boundaries.
 
 If the first available sequence is newer than the client's next sequence, the
 client fell behind cleanup and must jump forward with a discontinuity. Poll at
@@ -93,10 +102,12 @@ unchanged or the server is unavailable.
 
 ## Publication, cleanup, and restart
 
-The writer creates a temporary file in the serving directory, optionally
-`fsync`s it, and renames it over the final path. It publishes the segment before
-atomically replacing the manifest. nginx therefore never sees a manifest that
-points at a partial segment. The manifest retains `window_segments`; files remain
+The writer buffers PCM until it has one full configured segment, dropping a
+short final tail so every published segment has the same duration. It creates a
+temporary file in the serving directory, optionally `fsync`s it, and renames it
+over the final path. It publishes the segment before atomically replacing the
+manifests. nginx therefore never sees a manifest that points at a partial
+segment. The manifest retains `window_segments`; files remain
 for an additional `stale_grace_segments` window to reduce races with clients
 holding a recently replaced manifest.
 

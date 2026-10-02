@@ -1,44 +1,27 @@
 syntax = "proto3";
 
-package encodec.live.v1;
+package encodec.live.v2;
 
-// Binary equivalent of the JSON v1 rolling manifest. stream.pb and
-// stream.json are generated from the same in-memory manifest snapshot.
+// Compact protobuf manifest. Codec/container metadata is read from ECDC files.
 message StreamManifest {
-  string format = 1;
-  uint32 version = 2;
-  string updated_at = 3;
-  uint64 media_sequence = 4;
-  uint64 discontinuity_sequence = 5;
-  double target_duration = 6;
-  bool independent_segments = 7;
-  StreamInit init = 8;
-  repeated Segment segments = 9;
-  optional string title = 10;
+  uint32 schema_version = 1; // 2
+  uint64 media_sequence = 2;
+  uint32 segment_duration_samples = 3; // Same for every listed segment.
+  optional string title = 4;
+  repeated EpochGroup epochs = 5;
 }
 
-message StreamInit {
-  string container = 1;
-  uint32 container_version = 2;
-  string model = 3;
-  uint32 sample_rate = 4;
-  uint32 channels = 5;
-  uint32 bits_per_codebook = 6;
-  double bandwidth_kbps = 7;
-  uint32 codebooks = 8;
-  bool language_model = 9;
-  bool self_initializing_segments = 10;
+// Groups consecutive segments from one FFmpeg/encoder timeline.
+message EpochGroup {
+  // Numeric epoch identifier: Unix milliseconds when this epoch began.
+  uint64 epoch_start_unix_ms = 1;
+  // Applies to the first segment in this group; later entries are continuous.
+  bool first_segment_discontinuity = 2;
+  repeated Segment segments = 3;
 }
 
 message Segment {
-  uint64 sequence = 1;
-  string uri = 2;
-  double duration = 3;
-  uint64 sample_count = 4;
-  uint64 pts_samples = 5;
-  string program_date_time = 6;
-  string epoch = 7;
-  bool discontinuity = 8;
-  uint64 byte_length = 9;
-  string sha256 = 10;
+  uint32 byte_length = 1;
+  // CRC-32C (Castagnoli) of the complete ECDC file.
+  fixed32 crc32c = 2;
 }

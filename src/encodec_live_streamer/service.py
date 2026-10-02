@@ -58,6 +58,7 @@ class LiveService:
                 epoch = str(uuid.uuid4())
                 pts_samples = 0
                 anchor = datetime.now(timezone.utc)
+                epoch_start_unix_ms = int(anchor.timestamp() * 1000)
                 first_segment = True
                 published = 0
                 try:
@@ -80,6 +81,7 @@ class LiveService:
                                 "+00:00", "Z"
                             ),
                             epoch=epoch,
+                            epoch_start_unix_ms=epoch_start_unix_ms,
                             discontinuity=first_segment,
                         )
                         LOG.info(

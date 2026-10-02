@@ -10,12 +10,12 @@ from encodec_live_streamer.manifest import ManifestStore
 
 
 def publish(store: ManifestStore, sequence_in_epoch: int, discontinuity: bool = False) -> None:
-    samples = store.config.sample_rate
+    samples = store.config.samples_per_segment
     store.publish_segment(
         make_test_ecdc(samples, store.config.codebooks, store.config.model),
         sample_count=samples,
         pts_samples=sequence_in_epoch * samples,
-        program_date_time=f"2026-01-01T00:00:0{sequence_in_epoch}Z",
+        program_date_time="2026-01-01T00:00:00Z",
         epoch="test-epoch",
         discontinuity=discontinuity,
     )
@@ -98,7 +98,9 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(document["init"]["sample_rate"], 24_000)
             self.assertEqual(document["init"]["channels"], 1)
             self.assertEqual(document["init"]["codebooks"], 4)
-            self.assertEqual(document["segments"][0]["duration"], 1.0)
+            self.assertEqual(
+                document["segments"][0]["duration"], config.segment_duration
+            )
 
     def test_rejects_wrong_segment_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

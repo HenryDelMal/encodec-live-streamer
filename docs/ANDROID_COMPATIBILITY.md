@@ -25,18 +25,22 @@ two. Clients must trust and validate the ECDC `m`/`nc` metadata and manifest
 The Android live implementation should:
 
 1. Poll the JSON v1 manifest with caching disabled and resolve relative segment
-   URLs against the manifest URL. The publisher also emits `stream.pb` for
-   clients that generate bindings from `proto/stream.proto`; the Android player
-   currently consumes `stream.json`.
-2. Schedule increasing sequence numbers, maintain a small live-edge buffer, and
-   validate byte length/SHA-256 before decode.
-3. Select the native 24 kHz or 48 kHz decoder from `init.model`, `sample_rate`,
-   and `channels`, rejecting inconsistent combinations.
+   URLs against the manifest URL. The publisher also emits `stream.pb` with
+   schema version 2 for clients using generated bindings from
+   `proto/stream.proto`; the Android player currently consumes `stream.json`.
+2. For protobuf, derive sequence and URL from `media_sequence` and segment
+   order. Use its fixed `segment_duration_samples`; every listed segment has
+   that duration. Validate byte length and CRC-32C before decode. JSON clients
+   continue to use the per-segment URI and SHA-256 fields.
+3. Read the first ECDC header to select and validate the native 24 kHz or 48 kHz
+   decoder. The protobuf manifest intentionally has no separate `init` object.
 4. Keep one decoder/audio sink alive while opening a fresh ECDC reader for each
    independently encoded segment.
-5. Flush and rebuffer after a sequence gap, epoch change, or discontinuity.
-6. Configure `AudioTrack` for 24 kHz mono or 48 kHz stereo as declared by the
-   stream instead of assuming the HQ layout.
+5. Flush and rebuffer after a sequence gap or discontinuity. In protobuf, each
+   `EpochGroup` describes one timeline and its flag applies to the first listed
+   segment in that group.
+6. Configure `AudioTrack` for 24 kHz mono or 48 kHz stereo from the ECDC header
+   instead of assuming the HQ layout.
 
 The manifest may contain an optional top-level `title`. Android may use it as a
 display label and fall back to its existing URL-derived label when absent. It

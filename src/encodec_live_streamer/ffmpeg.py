@@ -78,10 +78,7 @@ class FfmpegInput:
                 yield bytes(buffer[:wanted])
                 del buffer[:wanted]
             else:
-                # A final whole-sample partial segment is still independently useful.
-                usable = len(buffer) - (len(buffer) % bytes_per_sample_frame)
-                if usable:
-                    yield bytes(buffer[:usable])
+                # Keep each published ECDC segment at the manifest's fixed duration.
                 return
             while len(buffer) < wanted:
                 block = self.process.stdout.read(wanted - len(buffer))
