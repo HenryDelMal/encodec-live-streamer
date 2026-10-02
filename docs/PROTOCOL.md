@@ -6,7 +6,12 @@ The manifest media type is `application/vnd.encodec.live+json`.
 
 ## Transport objects
 
-`stream.json` is an atomically replaced UTF-8 JSON document. Each segment URI
+`stream.json` is an atomically replaced, minified UTF-8 JSON document. The
+publisher also writes `stream.pb`, an atomically replaced binary Protocol
+Buffers encoding of the same manifest snapshot. Both files use `no-store`
+caching and contain the same fields and segment window. The protobuf schema is
+[`proto/stream.proto`](../proto/stream.proto); clients can generate language
+bindings from it. Each segment URI
 names an atomically published, complete Meta ECDC version-0 file. A client must
 resolve relative segment URIs against the manifest URL. Every segment is
 independently decodable and contains its own initialization header. Language
@@ -25,6 +30,11 @@ The manifest has these fields:
 | `independent_segments` | Always `true`. |
 | `init` | Stream-wide codec/container information shown below. |
 | `segments` | Ordered rolling window of segment records. |
+
+The protobuf field numbers map one-to-one to the JSON fields. `title` is
+optional in both encodings and remains absent when not configured. The two
+files are atomically replaced individually, so a client polling both should
+use the `updated_at` value to detect whether they represent the same snapshot.
 
 Clients must ignore unknown manifest fields. The optional `title` field is an
 additive version-1 extension: publishers do not emit it unless configured, and
@@ -99,7 +109,8 @@ cleaned.
 
 ## HTTP caching
 
-Serve the manifest with `Cache-Control: no-store, max-age=0` and no ETag. Serve
+Serve both manifest files with `Cache-Control: no-store, max-age=0` and no
+ETag. Serve `stream.pb` as `application/protobuf`. Serve
 numbered segments with `Cache-Control: public, max-age=31536000, immutable` and
 an ETag. Do not enable nginx directory indexes. TLS is strongly recommended for
 traffic outside a trusted LAN.

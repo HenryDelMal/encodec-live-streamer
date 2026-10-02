@@ -42,7 +42,7 @@ file / ALSA / HTTP radio / Icecast / RTMP / SRT / any FFmpeg input
                                 |
           segment-000000000000.ecdc, segment-...ecdc
                                 |
-                    atomic rolling stream.json
+              atomic stream.json and stream.pb manifests
                                 |
                               nginx
 ```
@@ -51,7 +51,9 @@ file / ALSA / HTTP radio / Icecast / RTMP / SRT / any FFmpeg input
   conversion. FFmpeg itself is not patched.
 - Every segment is a complete official ECDC v0 file with `lm=false` and can be
   decoded independently.
-- Segment files and the rolling manifest are published with atomic renames.
+- Segment files and both rolling manifests are published with atomic renames.
+- `stream.json` is minified; `stream.pb` carries the same manifest snapshot in
+  Protocol Buffers format. See [`proto/stream.proto`](proto/stream.proto).
 - Sequence numbers are recovered from disk and never reused in an output
   directory.
 - Service/FFmpeg restarts create a new epoch and discontinuity marker.
@@ -371,7 +373,12 @@ permit systemd mount namespaces, remove `PrivateTmp`, `ProtectSystem`,
 
 ```text
 http://SERVER:8080/encodec/stream.json
+http://SERVER:8080/encodec/stream.pb
 ```
+
+`stream.json` is minified UTF-8 JSON for current clients. `stream.pb` is the
+binary Protocol Buffers form of the same snapshot; its schema is in
+[`proto/stream.proto`](proto/stream.proto). Both manifests disable caching.
 
 Install it after reviewing the listen address, hostname, and TLS requirements:
 

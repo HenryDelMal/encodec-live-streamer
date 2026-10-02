@@ -25,7 +25,9 @@ two. Clients must trust and validate the ECDC `m`/`nc` metadata and manifest
 The Android live implementation should:
 
 1. Poll the JSON v1 manifest with caching disabled and resolve relative segment
-   URLs against the manifest URL.
+   URLs against the manifest URL. The publisher also emits `stream.pb` for
+   clients that generate bindings from `proto/stream.proto`; the Android player
+   currently consumes `stream.json`.
 2. Schedule increasing sequence numbers, maintain a small live-edge buffer, and
    validate byte length/SHA-256 before decode.
 3. Select the native 24 kHz or 48 kHz decoder from `init.model`, `sample_rate`,
