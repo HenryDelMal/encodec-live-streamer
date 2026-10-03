@@ -12,6 +12,10 @@ replaced compact Protocol Buffers manifest using schema version 2. Both files
 describe the same segment window and use `no-store` caching. The protobuf schema
 is [`proto/stream.proto`](../proto/stream.proto).
 
+The optional persistent TCP transport carries the identical protobuf bytes and
+ECDC files. Its framing and client algorithm are defined in
+[`TCP_PROTOCOL.md`](TCP_PROTOCOL.md); HTTP publication remains available alongside it.
+
 The protobuf layout omits data clients can derive. `media_sequence` plus the
 flattened order of segments gives each sequence number; the URI is
 `segment-%012d.ecdc` using that sequence. `segment_duration_samples` is fixed
@@ -24,29 +28,29 @@ Each segment stores only byte length and CRC-32C (Castagnoli) of its complete
 ECDC file. Every ECDC segment is independently decodable and has its own
 initialization header; language-model entropy coding is disabled.
 
-The manifest has these fields:
+The JSON manifest has these fields:
 
 | Field | Meaning |
 | --- | --- |
 | `format`, `version` | Fixed as `encodec-live-v1` and `1`. |
-| `title` | Optional human-readable stream title. Omitted when not configured. It does not identify codec compatibility. |
 | `updated_at` | RFC 3339 UTC time at manifest publication. |
 | `media_sequence` | Sequence of the first listed segment, or the next sequence when empty. |
 | `discontinuity_sequence` | Number of discontinuity markers removed from the head of this rolling manifest. |
-| `target_duration` | Configured nominal segment duration in seconds. The last segment of a finite input may be shorter. |
+| `target_duration` | Configured fixed segment duration in seconds. Short final PCM tails are discarded. |
 | `independent_segments` | Always `true`. |
 | `init` | Stream-wide codec/container information shown below. |
 | `segments` | Ordered rolling window of segment records. |
 
-`title` is optional in both encodings and remains absent when not configured.
 The files are atomically replaced individually. If a client compares both,
-match their `media_sequence`, segment count, and title. Protobuf schema version
+match their `media_sequence` and segment count. Protobuf schema version
 2 is wire-incompatible with the earlier protobuf draft; clients should
 regenerate bindings from the current schema and check `schema_version`.
 
-Clients must ignore unknown manifest fields. The optional `title` field is an
-additive version-1 extension: publishers do not emit it unless configured, and
-clients may display it or fall back to their existing URL-derived label.
+Clients must ignore unknown manifest fields. Titles are no longer published in
+either encoding. Protobuf field number 4 and its former name `title` are reserved;
+schema version 2 is retained because removing an optional field is compatible
+with existing v2 readers. Old TOML `title` settings are accepted with a warning
+and ignored. Clients should use a locally configured display label.
 
 `init` fixes ECDC v0, the selected model profile, sample rate, channels, ten
 bits per codebook, configured bandwidth/codebooks, `language_model=false`, and
@@ -132,5 +136,5 @@ Official ECDC v0 records total audio length in its opening header, so it cannot
 represent an endless source as one valid file. A future custom continuous
 transport could length-prefix complete ECDC segments on a chunked HTTP response,
 but it would add reconnection/framing logic and still require a custom Android
-client. Version 1 favors ordinary static HTTP objects for reliability and
-inspection.
+client. HTTP uses ordinary static objects; the optional ELTCP transport requests
+the same complete files through a persistent framed connection.

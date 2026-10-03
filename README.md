@@ -394,6 +394,36 @@ immutable and receive a long cache lifetime. Directory indexing is disabled.
 Use TLS and authentication/access controls when exposing a stream outside a
 trusted network.
 
+## Optional TCP transport
+
+ELTCP v1 serves the same protobuf manifest and numbered ECDC segments on a
+persistent TCP socket. HTTP publication continues alongside it. Add these keys
+to the existing `[stream]` TOML table to accept remote IPv4 clients:
+
+```toml
+tcp_enabled = true
+tcp_host = "0.0.0.0"
+tcp_port = 9001
+```
+
+TCP is disabled by default and defaults to a loopback bind address. Allow the
+chosen port through your firewall and restart the publisher. The service needs
+no nginx changes for this direct listener. Ports above 1023 work with the
+unprivileged account in the provided systemd unit; each publisher instance
+needs its own port.
+
+Requests usually cost two bytes per segment. The response adds one type byte
+and a varint length to the ECDC data; CRC32C is already in the manifest. Manifest
+requests wait for publication changes and return a one-byte response when
+unchanged. Success acknowledgements are optional because TCP already handles
+delivery. The listener bounds client count, idle time, and CRC retry count.
+
+The direct listener is plain TCP without TLS or authentication. Configure the
+client with a TCP host/port and a paired HTTPS manifest URL for fallback when
+the TCP port cannot be reached. The server cannot trigger fallback on behalf
+of the client. See [`docs/TCP_PROTOCOL.md`](docs/TCP_PROTOCOL.md) for the complete
+wire format, architecture, state machine, schema, and client implementation notes.
+
 ## CLI
 
 ```text
@@ -407,15 +437,9 @@ Configuration is TOML. Unknown keys, unsupported sample-rate/bandwidth pairs,
 unsafe manifest names, invalid thread counts, and invalid window/duration values
 are rejected. See the fully commented `config/encodec-live.example.toml`.
 
-An optional human-readable stream title can be published in `stream.json`:
-
-```toml
-title = "My EnCodec Stream"
-```
-
-When `title` is omitted, the manifest remains unchanged. The field is additive,
-does not alter the protocol version or codec initialization, and older clients
-should ignore it. See `docs/PROTOCOL.md`.
+Titles are no longer included in JSON or protobuf manifests. Existing TOML
+`title` settings are ignored with a warning; remove them from your config.
+The former protobuf field is reserved for compatibility with existing v2 readers.
 
 ## Tests and repository verification
 

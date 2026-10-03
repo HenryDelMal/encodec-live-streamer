@@ -42,10 +42,33 @@ The Android live implementation should:
 6. Configure `AudioTrack` for 24 kHz mono or 48 kHz stereo from the ECDC header
    instead of assuming the HQ layout.
 
-The manifest may contain an optional top-level `title`. Android may use it as a
-display label and fall back to its existing URL-derived label when absent. It
-must not use the title for stream identity or codec selection, and JSON parsing
-should continue to ignore unknown fields for version-1 compatibility.
+Titles are no longer published. Use a locally configured or URL-derived display
+label. Existing protobuf v2 readers remain compatible with the reserved former
+title field; JSON readers must tolerate its absence.
+
+## Optional TCP with HTTP fallback
+
+Implement ELTCP v1 from [`TCP_PROTOCOL.md`](TCP_PROTOCOL.md) using a persistent
+socket and the same protobuf v2 bindings. The endpoint configuration must store
+both a TCP host/port and its paired HTTPS manifest URL; no title or endpoint
+discovery data is added to the manifest. TCP requests use the index in the last
+manifest delivered on that connection; playback still tracks absolute uint64
+sequence numbers across TCP reconnects and HTTP fallback.
+
+Read a whole framed response before interpreting the next one: TCP read calls
+can split or combine messages arbitrarily. Read protobuf sizes as unsigned
+varints, cap allocation (for example 1 MiB for a manifest or segment), and check
+schema version, sample duration, and ECDC header consistency. Use the manifest's
+CRC32C for fetched segments, with no second checksum in the TCP envelope.
+
+Allow a read timeout greater than the server's long-poll wait (default 15 s;
+30 s is a suitable client default for that setting). On connection failure,
+timeout, `b`, `r`, or unsupported framing, fetch the configured HTTPS
+`stream.pb` URL, continuing from the next unplayed sequence where available.
+Use `stream.json` only if protobuf is unavailable, validating SHA-256 there.
+Back off subsequent TCP attempts (for example 30 s, doubling to at most 5 min)
+while HTTP playback continues. TCP and HTTP must point at the same publisher;
+deduplicate absolute sequences so a fallback does not replay audio.
 
 The related Android task already contains C++ decoders and ECDC parsing for both
 profiles. No Python, PyTorch, ExecuTorch, Flutter, or server model file is needed

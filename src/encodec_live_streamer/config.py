@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import pathlib
 from typing import Any
 
@@ -34,7 +35,6 @@ MODEL_PROFILES = {
 class Config:
     input: str
     output_dir: pathlib.Path
-    title: str | None = None
     input_format: str | None = None
     input_options: tuple[str, ...] = ()
     output_options: tuple[str, ...] = ()
@@ -52,6 +52,13 @@ class Config:
     restart_delay: float = 2.0
     manifest_name: str = "stream.json"
     fsync: bool = True
+    tcp_enabled: bool = False
+    tcp_host: str = "127.0.0.1"
+    tcp_port: int = 9001
+    tcp_max_clients: int = 32
+    tcp_idle_timeout: float = 60.0
+    tcp_manifest_wait: float = 15.0
+    tcp_max_retries: int = 2
 
     @property
     def profile(self) -> dict[str, Any]:
@@ -103,11 +110,6 @@ class Config:
     def validate(self) -> Config:
         if not self.input:
             raise ValueError("input must not be empty")
-        if self.title is not None:
-            if not isinstance(self.title, str):
-                raise ValueError("title must be a string")
-            if not self.title.strip():
-                raise ValueError("title must not be empty")
         if isinstance(self.samplerate, bool) or not isinstance(self.samplerate, int):
             raise ValueError("samplerate must be the integer 24 or 48")
         if self.samplerate not in MODEL_PROFILES:
@@ -142,6 +144,35 @@ class Config:
             raise ValueError("restart_delay cannot be negative")
         if pathlib.Path(self.manifest_name).name != self.manifest_name:
             raise ValueError("manifest_name must be a file name, not a path")
+        if not isinstance(self.tcp_enabled, bool):
+            raise ValueError("tcp_enabled must be a boolean")
+        if not isinstance(self.tcp_host, str) or not self.tcp_host.strip():
+            raise ValueError("tcp_host must be a nonempty bind address")
+        for name, minimum, maximum in (
+            ("tcp_port", 1, 65535),
+            ("tcp_max_clients", 1, 1024),
+            ("tcp_max_retries", 0, 10),
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(f"{name} must be an integer between {minimum} and {maximum}")
+        for name, minimum, maximum in (
+            ("tcp_idle_timeout", 1, 3600),
+            ("tcp_manifest_wait", 0.1, 300),
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(f"{name} must be between {minimum} and {maximum} seconds")
+        if self.tcp_manifest_wait >= self.tcp_idle_timeout:
+            raise ValueError("tcp_manifest_wait must be less than tcp_idle_timeout")
         return self
 
     @classmethod
@@ -150,7 +181,12 @@ class Config:
         with source.open("rb") as handle:
             raw = tomllib.load(handle)
 
-        table: dict[str, Any] = raw.get("stream", raw)
+        table: dict[str, Any] = dict(raw.get("stream", raw))
+        if "title" in table:
+            table.pop("title")
+            logging.getLogger(__name__).warning(
+                "title is no longer published; remove it from the TOML configuration"
+            )
         allowed = {field.name for field in dataclasses.fields(cls)}
         unknown = set(table) - allowed
         if unknown:

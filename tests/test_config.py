@@ -105,13 +105,36 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "input, output_dir"):
                 Config.from_toml(path)
 
-    def test_optional_title_from_toml_and_validation(self) -> None:
+    def test_legacy_title_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "stream.toml"
             path.write_text(
                 '[stream]\ninput = "x"\noutput_dir = "public"\n'
                 'title = "Bio Bio Santiago"\n'
             )
-            self.assertEqual(Config.from_toml(path).title, "Bio Bio Santiago")
-            with self.assertRaisesRegex(ValueError, "title must not be empty"):
-                Config(input="x", output_dir=Path(directory), title="  ").validate()
+            with self.assertLogs("encodec_live_streamer.config", level="WARNING"):
+                config = Config.from_toml(path)
+            self.assertFalse(hasattr(config, "title"))
+
+    def test_tcp_settings_from_toml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stream.toml"
+            path.write_text(
+                '[stream]\ninput = "x"\noutput_dir = "public"\n'
+                'tcp_enabled = true\ntcp_host = "0.0.0.0"\ntcp_port = 9900\n'
+            )
+            config = Config.from_toml(path)
+            self.assertTrue(config.tcp_enabled)
+            self.assertEqual(config.tcp_host, "0.0.0.0")
+            self.assertEqual(config.tcp_port, 9900)
+
+    def test_tcp_limits_and_types(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for values in (
+                {"tcp_enabled": 1}, {"tcp_host": ""}, {"tcp_port": 0},
+                {"tcp_port": 65536}, {"tcp_port": True}, {"tcp_max_clients": 0},
+                {"tcp_max_retries": -1}, {"tcp_idle_timeout": float("nan")},
+                {"tcp_manifest_wait": 0}, {"tcp_manifest_wait": 60},
+            ):
+                with self.subTest(values=values), self.assertRaisesRegex(ValueError, "tcp_"):
+                    Config(input="x", output_dir=Path(directory), **values).validate()

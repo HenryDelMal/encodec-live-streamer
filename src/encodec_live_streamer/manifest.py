@@ -7,6 +7,8 @@ import pathlib
 import re
 import struct
 import tempfile
+import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -44,10 +46,6 @@ def _protobuf_bytes(field: int, value: bytes) -> bytes:
     return _protobuf_varint((field << 3) | 2) + _protobuf_varint(len(value)) + value
 
 
-def _protobuf_string(field: int, value: str) -> bytes:
-    return _protobuf_bytes(field, value.encode("utf-8"))
-
-
 def _unix_millis(value: str) -> int:
     timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if timestamp.tzinfo is None:
@@ -80,9 +78,6 @@ def manifest_protobuf(
             )
         )
     )
-    if "title" in document:
-        encoded.extend(_protobuf_string(4, document["title"]))
-
     groups: list[list[dict[str, Any]]] = []
     for segment in segment_metadata:
         if not groups or groups[-1][-1]["epoch"] != segment["epoch"]:
@@ -109,6 +104,19 @@ def manifest_protobuf(
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class PublishedSegment:
+    sequence: int
+    uri: str
+    byte_length: int
+
+
+@dataclass(frozen=True)
+class PublicationSnapshot:
+    manifest: bytes
+    segments: tuple[PublishedSegment, ...]
 
 
 def atomic_write(path: pathlib.Path, payload: bytes, fsync: bool = True) -> None:
@@ -150,6 +158,8 @@ class ManifestStore:
         self.discontinuity_sequence = 0
         self.next_sequence = self._next_sequence_on_disk()
         self._load_compatible_manifest()
+        self._publication_changed = threading.Condition()
+        self._snapshot = self._make_snapshot()
 
     @property
     def init(self) -> dict[str, Any]:
@@ -202,6 +212,13 @@ class ManifestStore:
             ):
                 # A legacy short tail cannot coexist with the fixed-duration
                 # protobuf window; resume sequence numbers but start a fresh window.
+                return
+            if valid and any(
+                int(item["sequence"]) != int(valid[0]["sequence"]) + index
+                for index, item in enumerate(valid)
+            ):
+                # Compact manifests derive sequence from position, so cannot
+                # represent holes left by manually removed segment files.
                 return
             self.segments = valid[-self.config.window_segments :]
             self.discontinuity_sequence = int(old.get("discontinuity_sequence", 0))
@@ -289,9 +306,35 @@ class ManifestStore:
                 for item in self.segments
             ],
         }
-        if self.config.title is not None:
-            document["title"] = self.config.title
         return document
+
+    def _make_snapshot(self, manifest: bytes | None = None) -> PublicationSnapshot:
+        return PublicationSnapshot(
+            manifest if manifest is not None else manifest_protobuf(self.document(), self.segments),
+            tuple(
+                PublishedSegment(item["sequence"], item["uri"], item["byte_length"])
+                for item in self.segments
+            ),
+        )
+
+    def snapshot(self) -> PublicationSnapshot:
+        """Return one immutable window shared by all TCP readers."""
+        with self._publication_changed:
+            return self._snapshot
+
+    def wait_snapshot(
+        self, previous: bytes, timeout: float, stopping: threading.Event
+    ) -> PublicationSnapshot:
+        with self._publication_changed:
+            self._publication_changed.wait_for(
+                lambda: self._snapshot.manifest != previous or stopping.is_set(),
+                timeout,
+            )
+            return self._snapshot
+
+    def wake_snapshot_waiters(self) -> None:
+        with self._publication_changed:
+            self._publication_changed.notify_all()
 
     def write_manifest(self) -> None:
         document = self.document()
@@ -301,6 +344,10 @@ class ManifestStore:
         encoded_protobuf = manifest_protobuf(document, self.segments)
         atomic_write(self.protobuf_path, encoded_protobuf, self.config.fsync)
         atomic_write(self.path, encoded_json, self.config.fsync)
+        snapshot = self._make_snapshot(encoded_protobuf)
+        with self._publication_changed:
+            self._snapshot = snapshot
+            self._publication_changed.notify_all()
 
     def cleanup(self) -> None:
         if not self.segments:

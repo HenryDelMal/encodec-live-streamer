@@ -2,9 +2,6 @@
 # Any URL/path/device FFmpeg accepts. Input-specific options go before -i.
 input = "https://radio.example/live.mp3"
 output_dir = "/opt/encodec-live/public"
-# Optional human-readable label published as the top-level `title` in stream.json.
-# Existing manifests remain unchanged when this setting is omitted.
-# title = "My EnCodec Stream"
 
 # Examples:
 # ALSA: input = "hw:0" and input_format = "alsa"
@@ -44,3 +41,17 @@ restart_delay = 2.0
 manifest_name = "stream.json"
 # Disable only for disposable/test output when lower durability is acceptable.
 fsync = true
+
+# Optional persistent ELTCP v1 transport, alongside the HTTP files above.
+# To accept remote clients, set tcp_host = "0.0.0.0" (IPv4) or "::" (IPv6)
+# and allow tcp_port through the host firewall. Plain TCP has no TLS/authentication.
+tcp_enabled = false
+tcp_host = "127.0.0.1"
+tcp_port = 9001
+tcp_max_clients = 32
+tcp_idle_timeout = 60.0
+# A manifest request waits up to this many seconds for a new publication.
+# Keep it below tcp_idle_timeout; the client read timeout must exceed this.
+tcp_manifest_wait = 15.0
+# Extra sends of the most recently fetched segment after a client CRC error.
+tcp_max_retries = 2

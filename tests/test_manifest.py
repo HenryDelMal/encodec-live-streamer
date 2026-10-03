@@ -6,7 +6,7 @@ import unittest
 
 from encodec_live_streamer.config import Config
 from encodec_live_streamer.ecdc import make_test_ecdc
-from encodec_live_streamer.manifest import ManifestStore
+from encodec_live_streamer.manifest import ManifestStore, crc32c
 
 
 def publish(store: ManifestStore, sequence_in_epoch: int, discontinuity: bool = False) -> None:
@@ -22,23 +22,33 @@ def publish(store: ManifestStore, sequence_in_epoch: int, discontinuity: bool = 
 
 
 class ManifestTests(unittest.TestCase):
-    def test_optional_stream_title_is_additive(self) -> None:
+    def test_title_and_internal_checksum_are_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            untitled = ManifestStore(
+            store = ManifestStore(
                 Config(input="unused", output_dir=path, fsync=False).validate()
-            ).document()
-            self.assertNotIn("title", untitled)
+            )
+            publish(store, 0)
+            document = json.loads(store.path.read_text())
+            self.assertNotIn("title", document)
+            self.assertNotIn("_crc32c", document["segments"][0])
+            self.assertEqual(store.snapshot().manifest, store.protobuf_path.read_bytes())
 
-            titled = ManifestStore(
-                Config(
-                    input="unused",
-                    output_dir=path,
-                    title="Bio Bio Santiago",
-                    fsync=False,
-                ).validate()
-            ).document()
-            self.assertEqual(titled["title"], "Bio Bio Santiago")
+    def test_crc32c_known_vectors(self) -> None:
+        self.assertEqual(crc32c(b""), 0)
+        self.assertEqual(crc32c(b"123456789"), 0xE3069283)
+
+    def test_rejects_short_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(input="unused", output_dir=Path(directory), fsync=False).validate()
+            store = ManifestStore(config)
+            with self.assertRaisesRegex(ValueError, "fixed segment duration"):
+                store.publish_segment(
+                    make_test_ecdc(24_000, config.codebooks, config.model),
+                    sample_count=24_000, pts_samples=0,
+                    program_date_time="2026-01-01T00:00:00Z",
+                    epoch="short", discontinuity=True,
+                )
 
     def test_rolls_manifest_and_cleans_with_grace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -101,6 +111,17 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual(
                 document["segments"][0]["duration"], config.segment_duration
             )
+
+    def test_restart_discards_a_window_with_sequence_holes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Config(input="unused", output_dir=Path(directory), fsync=False).validate()
+            store = ManifestStore(config)
+            for index in range(3):
+                publish(store, index)
+            (config.output_dir / "segment-000000000001.ecdc").unlink()
+            restarted = ManifestStore(config)
+            self.assertEqual(restarted.next_sequence, 3)
+            self.assertEqual(restarted.snapshot().segments, ())
 
     def test_rejects_wrong_segment_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

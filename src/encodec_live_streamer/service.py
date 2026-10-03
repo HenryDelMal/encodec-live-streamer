@@ -12,6 +12,7 @@ from .config import Config
 from .encoder import EncodecEncoder
 from .ffmpeg import FfmpegInput
 from .manifest import ManifestStore
+from .tcp import TcpServer
 
 
 LOG = logging.getLogger(__name__)
@@ -44,13 +45,19 @@ class LiveService:
             self._input.stop()
 
     def run(self) -> None:
-        if self.encoder is None:
-            self.encoder = EncodecEncoder(self.config)
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, self.request_stop)
 
         first_attempt = True
+        tcp_server: TcpServer | None = None
         try:
+            # Refresh HTTP manifests at startup, including removal of legacy titles.
+            self.store.write_manifest()
+            if self.config.tcp_enabled:
+                tcp_server = TcpServer(self.config, self.store)
+                tcp_server.start()
+            if self.encoder is None:
+                self.encoder = EncodecEncoder(self.config)
             while not self.stopping.is_set():
                 source = FfmpegInput(self.config)
                 self._input = source
@@ -116,7 +123,8 @@ class LiveService:
                 if first_attempt and self.config.restart_delay == 0:
                     time.sleep(0.1)
         finally:
-            assert self.encoder is not None
+            if tcp_server is not None:
+                tcp_server.close()
             close = getattr(self.encoder, "close", None)
             if close is not None:
                 close()

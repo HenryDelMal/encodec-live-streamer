@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"warning: segment_duration is not aligned to {config.alignment_description}",
                 )
             print("configuration: OK")
+            if config.tcp_enabled:
+                print(f"TCP transport: {config.tcp_host}:{config.tcp_port} (ELTCP v1)")
             return 0
         LiveService(config).run()
         return 0
