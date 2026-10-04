@@ -1,4 +1,5 @@
 import socket
+import struct
 import tempfile
 import threading
 import time
@@ -7,7 +8,7 @@ from pathlib import Path
 
 from encodec_live_streamer.config import Config
 from encodec_live_streamer.ecdc import make_test_ecdc
-from encodec_live_streamer.manifest import ManifestStore
+from encodec_live_streamer.manifest import ManifestStore, crc32c
 from encodec_live_streamer.tcp import TcpServer, encode_varint, read_varint
 
 
@@ -26,6 +27,15 @@ def receive_payload(connection, expected):
     if kind != expected:
         raise AssertionError(f"expected {expected!r}, received {kind!r}")
     return receive_exact(connection, read_varint(connection))
+
+
+def receive_absolute_segment(connection):
+    if receive_exact(connection, 1) != b"S":
+        raise AssertionError("expected absolute-sequence segment response")
+    length = read_varint(connection)
+    checksum = struct.unpack(">I", receive_exact(connection, 4))[0]
+    flags = receive_exact(connection, 1)[0]
+    return receive_exact(connection, length), checksum, flags
 
 
 class TcpTests(unittest.TestCase):
@@ -127,6 +137,44 @@ class TcpTests(unittest.TestCase):
         self.assertEqual(receive_payload(connection, b"m"), self.store.snapshot().manifest)
         connection.sendall(b"s\x00")
         self.assertEqual(receive_payload(connection, b"s"), payload)
+
+    def test_absolute_fetch_needs_no_manifest_and_carries_crc_and_discontinuity(self):
+        connection = self.connect()
+        self.initialize(connection)
+        payload = self.publish()  # The init manifest did not include this sequence.
+        connection.sendall(b"f" + encode_varint(0))
+        body, checksum, flags = receive_absolute_segment(connection)
+        self.assertEqual(body, payload)
+        self.assertEqual(checksum, crc32c(payload))
+        self.assertEqual(flags, 1)
+        # Retry preserves the same response framing and metadata.
+        connection.sendall(b"e")
+        self.assertEqual(receive_absolute_segment(connection), (payload, checksum, flags))
+
+    def test_absolute_fetch_waits_briefly_for_next_sequence(self):
+        self.publish()
+        connection = self.connect()
+        self.initialize(connection)
+        connection.sendall(b"f" + encode_varint(1))
+        publisher = threading.Thread(target=self.publish)
+        publisher.start()
+        body, checksum, flags = receive_absolute_segment(connection)
+        publisher.join(timeout=1)
+        self.assertFalse(publisher.is_alive())
+        self.assertEqual(body, (self.config.output_dir / "segment-000000000001.ecdc").read_bytes())
+        self.assertEqual(checksum, crc32c(body))
+        self.assertEqual(flags, 0)
+
+    def test_absolute_fetch_reports_stale_or_not_yet_published(self):
+        self.publish()
+        connection = self.connect()
+        self.initialize(connection)
+        self.publish()
+        self.publish()  # Sequence 0 is now outside the retained window.
+        connection.sendall(b"f" + encode_varint(0))
+        self.assertEqual(receive_exact(connection, 1), b"g")
+        connection.sendall(b"f" + encode_varint(3))
+        self.assertEqual(receive_exact(connection, 1), b"n")
 
     def test_retry_uses_cached_bytes_even_after_cleanup_then_caps_retries(self):
         payload = self.publish()

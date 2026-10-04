@@ -413,14 +413,24 @@ no nginx changes for this direct listener. Ports above 1023 work with the
 unprivileged account in the provided systemd unit; each publisher instance
 needs its own port.
 
-Requests usually cost two bytes per segment. The response adds one type byte
-and a varint length to the ECDC data; CRC32C is already in the manifest. Manifest
-requests wait for publication changes and return a one-byte response when
-unchanged. If enabled, the server sends a one-byte `h` heartbeat during that
-wait; enable it only after the client recognizes `h`. Between requests, a client
-may also send `h` and expect the server to echo `h`. Success acknowledgements
-are optional because TCP already handles delivery. The listener bounds client
-count, idle time, and CRC retry count.
+Legacy clients fetch by manifest-relative index (`s`). Updated clients can use
+`f` plus the absolute sequence number to fetch the next segment without asking
+for a new manifest each time. The server briefly waits for that sequence, then
+returns its ECDC bytes, CRC32C, and discontinuity flag (`S`); if it is not ready,
+the client gets a one-byte `n` and retries later. This ready response costs the
+request bytes plus about 8 framing/metadata bytes and the segment itself; a
+not-ready probe costs the request bytes plus one byte. `m` manifest requests
+remain available for startup, reconnects, and resynchronization. Older clients
+continue to use `s` unchanged; clients should fall back to `m`/`s` if an older
+server rejects `f`.
+
+Manifest requests wait for publication changes and return a one-byte response
+when unchanged. If enabled, the server sends a one-byte `h` heartbeat during
+that wait; enable it only after the client recognizes `h`. Between requests, a
+client may also send `h` and expect the server to echo `h`. Success
+acknowledgements are optional because TCP already handles delivery. The listener
+bounds client count, idle time, and CRC retry count. See
+[`docs/TCP_PROTOCOL.md`](docs/TCP_PROTOCOL.md) for the wire details.
 
 The direct listener is plain TCP without TLS or authentication. Configure the
 client with a TCP host/port and a paired HTTPS manifest URL for fallback when

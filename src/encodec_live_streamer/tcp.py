@@ -4,14 +4,16 @@ from __future__ import annotations
 import logging
 import socket
 import socketserver
+import struct
 import threading
 import time
 
 from .config import Config
-from .manifest import ManifestStore, PublicationSnapshot
+from .manifest import ManifestStore, PublicationSnapshot, PublishedSegment
 
 
 LOG = logging.getLogger(__name__)
+SEGMENT_WAIT_SECONDS = 1.0
 
 
 class ProtocolError(ValueError):
@@ -49,7 +51,23 @@ def read_varint(connection: socket.socket) -> int:
 
 def send_payload(connection: socket.socket, kind: bytes, payload: bytes) -> None:
     # One write avoids Nagle/delayed-ACK stalls between header and payload.
-    connection.sendall(kind + encode_varint(len(payload)) + payload)
+    connection.sendall(payload_frame(kind, payload))
+
+
+def payload_frame(kind: bytes, payload: bytes) -> bytes:
+    return kind + encode_varint(len(payload)) + payload
+
+
+def absolute_segment_frame(item: PublishedSegment, payload: bytes) -> bytes:
+    """ELTCP v1 absolute-sequence reply: length, big-endian CRC32C, flags, ECDC."""
+    flags = 1 if item.discontinuity else 0
+    return (
+        b"S"
+        + encode_varint(len(payload))
+        + struct.pack(">I", item.crc32c)
+        + bytes((flags,))
+        + payload
+    )
 
 
 class _RequestHandler(socketserver.BaseRequestHandler):
@@ -60,7 +78,7 @@ class _RequestHandler(socketserver.BaseRequestHandler):
         connection.settimeout(server.config.tcp_idle_timeout)
         connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         window: PublicationSnapshot | None = None
-        last_segment: bytes | None = None
+        last_segment_response: bytes | None = None
         retries = 0
         try:
             while not server.stopping.is_set():
@@ -70,7 +88,7 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                 if window is None and command != b"i":
                     raise ProtocolError("connection must begin with i")
                 if command in (b"i", b"m"):
-                    last_segment = None
+                    last_segment_response = None
                     retries = 0
                     if command == b"i":
                         current = server.store.snapshot()
@@ -116,7 +134,7 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                 elif command == b"s":
                     assert window is not None
                     index = read_varint(connection)
-                    last_segment = None
+                    last_segment_response = None
                     retries = 0
                     if index >= len(window.segments):
                         connection.sendall(b"g")
@@ -130,19 +148,59 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                     if len(payload) != item.byte_length:
                         connection.sendall(b"g")
                         continue
-                    last_segment = payload
-                    send_payload(connection, b"s", payload)
+                    last_segment_response = payload_frame(b"s", payload)
+                    connection.sendall(last_segment_response)
+                elif command == b"f":
+                    # Fetch by absolute sequence without requiring a fresh manifest.
+                    # A future sequence is held for up to one second so publication
+                    # can satisfy it; otherwise n tells the client to retry later.
+                    sequence = read_varint(connection)
+                    last_segment_response = None
+                    retries = 0
+                    deadline = time.monotonic() + SEGMENT_WAIT_SECONDS
+                    while True:
+                        current = server.store.snapshot()
+                        first_sequence = (
+                            current.segments[0].sequence
+                            if current.segments
+                            else current.next_sequence
+                        )
+                        if sequence < first_sequence:
+                            connection.sendall(b"g")
+                            break
+                        if sequence < current.next_sequence:
+                            index = sequence - first_sequence
+                            if index >= len(current.segments):
+                                connection.sendall(b"g")
+                                break
+                            item = current.segments[index]
+                            try:
+                                payload = (server.store.output_dir / item.uri).read_bytes()
+                            except FileNotFoundError:
+                                connection.sendall(b"g")
+                                break
+                            if len(payload) != item.byte_length:
+                                connection.sendall(b"g")
+                                break
+                            last_segment_response = absolute_segment_frame(item, payload)
+                            connection.sendall(last_segment_response)
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or server.stopping.is_set():
+                            connection.sendall(b"n")
+                            break
+                        server.store.wait_snapshot(current.manifest, remaining, server.stopping)
                 elif command == b"e":
-                    if last_segment is None:
+                    if last_segment_response is None:
                         raise ProtocolError("no segment available to retry")
                     if retries >= server.config.tcp_max_retries:
                         connection.sendall(b"r")
                         return
                     retries += 1
-                    send_payload(connection, b"s", last_segment)
+                    connection.sendall(last_segment_response)
                 elif command == b"o":
-                    # Optional success ACK. Next s/i/m also acknowledges it.
-                    last_segment = None
+                    # Optional success ACK. Next s/f/i/m also acknowledges it.
+                    last_segment_response = None
                     retries = 0
                 else:
                     raise ProtocolError("unknown command")

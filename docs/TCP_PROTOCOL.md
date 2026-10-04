@@ -4,6 +4,9 @@ ELTCP v1 is an optional request/response transport over one persistent ordinary
 TCP connection. It carries the existing protobuf v2 manifest and complete ECDC
 files, with minimal framing. HTTP JSON/protobuf publication continues normally.
 The server uses only Python's standard library and does not re-encode for TCP.
+In addition to manifest-relative segment reads, ELTCP v1 supports direct
+absolute-sequence fetches so a client can advance without downloading each new
+manifest.
 
 ## Architecture
 
@@ -88,17 +91,20 @@ noncanonical encodings are protocol errors. These are binary integers, not
 decimal text. The sequence itself is uint64; a uint32 fixed-width request is
 unnecessary.
 
-Manifest and segment responses have this envelope:
+Manifest and legacy manifest-relative segment responses have this envelope:
 
 ```text
 type: 1 byte | payload_length: unsigned varint | payload: exactly length bytes
 ```
 
-Status responses contain only their one type byte. No checksum, segment ID,
-title, or timestamp is duplicated in the envelope. Manifest CRC32C covers each
+Status responses contain only their one type byte. The absolute-sequence
+response includes the requested segment's CRC32C and discontinuity flag because
+the client may not have fetched a newer manifest. Manifest CRC32C covers each
 entire ECDC file, including its header. Decode protobuf `fixed32 crc32c` as an
-unsigned 32-bit value; its four wire bytes are little-endian. Transport lengths
-are unsigned varints, not fixed-width or network-byte-order integers.
+unsigned 32-bit value; its four wire bytes are little-endian. The CRC in an
+absolute-sequence response is four-byte big-endian (network order). Transport
+lengths and requested sequences are unsigned varints, not decimal text or
+fixed-width integers.
 
 TCP does not preserve message boundaries. A read may contain half a frame or
 several frames. Use a buffered reader, decode one varint, then read exactly its
@@ -116,12 +122,13 @@ needed and responses always correspond to the pending request.
 | `i` | Initialize/reset connection | Immediately sends `m` plus the latest protobuf manifest; establishes the index mapping. Required first command. |
 | `m` | Ask for a changed manifest | Sends a new `m` frame immediately if changed, otherwise waits up to `tcp_manifest_wait`; replies `n` if still unchanged. |
 | `s` + varint index | Fetch a segment | Index is zero-based in the flattened segment list of the last manifest sent on this connection. Sends `s` with raw ECDC or `g`. |
-| `e` | CRC error after a complete segment response | Resends the cached last segment with an `s` frame, up to the retry limit. |
+| `f` + varint sequence | Fetch by absolute sequence | Sequence is the global ECDC sequence number, independent of the last manifest. The server waits up to one second for a not-yet-published sequence; it sends `S` with ECDC and metadata when available, `n` if it is still in the future, or `g` if stale/missing. |
+| `e` | CRC error after a complete segment response | Resends the cached last segment with its original framing (`s` or `S`), up to the retry limit. |
 | `o` | Optional success ACK | Frees the retry cache. No response. |
 | `h` | Client-initiated liveness probe | Server immediately echoes one byte `h`. Send only between requests, not while awaiting `m`. |
 | `q` | Close | Closes the connection. No response. Ordinary socket close also suffices. |
 
-A new `s`, `i`, or `m` implicitly acknowledges the previous segment and clears
+A new `s`, `f`, `i`, or `m` implicitly acknowledges the previous segment and clears
 its retry cache. Avoid `o` for minimum traffic. Do not send `e` after asking for
 another segment/manifest or acknowledging with `o`; it is then a protocol error.
 
@@ -142,12 +149,22 @@ expect one `h` byte. While `m` is pending, do not send commands; treat server
 | --- | --- | --- |
 | `m` | varint length + protobuf v2 | Replace the connection's manifest/index mapping. |
 | `s` | varint length + complete ECDC | Validate length and manifest CRC32C, then decode. |
-| `n` | None | Manifest unchanged after the wait; issue another `m` when ready. |
+| `S` | varint length + CRC32C (4-byte big-endian) + flags (1 byte) + complete ECDC | Reply to `f`. Check ECDC length and CRC32C. Bit 0 of flags means this segment begins a discontinuity; all other bits are reserved and must be zero. |
+| `n` | None | For `m`, the manifest was unchanged after the wait. For `f`, that sequence is not published yet; retry it later. |
 | `h` | None | During `m`, a server heartbeat; keep waiting and reset the client's liveness timer. Also the echo for a client `h` probe sent between requests. |
-| `g` | None | Index unavailable, file expired/missing, or file length inconsistent; refresh with `m`/`i` and rebuffer if behind. |
+| `g` | None | Requested segment is stale/unavailable or its file is missing/inconsistent; refresh with `m`/`i` and rebuffer if behind. |
 | `b` | None, followed by close | Client capacity exhausted; use HTTP/backoff. May arrive before init. |
 | `p` | None, followed by close | Protocol violation (unknown command, missing init, malformed varint, retry without a cached segment). |
 | `r` | None, followed by close | CRC retry limit exhausted; reconnect or use HTTP. |
+
+For `f`, `n` means the requested absolute sequence is not published yet; retry
+the same sequence after about one second. `f` is a single request/response (no
+manifest is needed between sequential segment requests). On startup or after
+reconnect, use `i` to obtain the current window and choose a starting absolute
+sequence; then increment it after each `S` response. Refresh with `m` when
+starting playback again, after `g`, or when the client needs a fresh live-edge
+position. The `S` response carries CRC32C and discontinuity metadata so the
+client can validate and resynchronize without a manifest refresh.
 
 Socket failures/timeouts may close the connection without a status. A protocol
 error status is best effort; a peer that sent unread invalid bytes may observe
@@ -156,7 +173,8 @@ is truncated or framing/length is invalid, **reconnect**: an `e` request cannot
 repair a desynchronized byte stream. Use `e` only after reading one full,
 correctly framed segment whose CRC does not match.
 
-The retry cache survives disk cleanup for that fetched segment. A repeated CRC
+The retry cache survives disk cleanup for that fetched segment and preserves
+the exact response format (`s` or `S`). A repeated CRC
 failure is bounded; retrying cannot fix an actually damaged file. Validate CRC
 again on each retry. TCP itself already retransmits lost/corrupted packets and
 delivers ordered bytes; application ACKs are optional, and no retry is needed
@@ -217,22 +235,22 @@ audio length inconsistent with `segment_duration_samples`.
 2. Connect with a bounded connection timeout (for example 3 seconds), send `i`,
    then read one manifest frame. A blocked port or failure should promptly use
    HTTPS. On a new connection, old indices have no meaning until init completes.
-3. Flatten epochs; initially select a few segments behind the live edge for
-   buffering. Track the absolute next sequence to play, not just an index.
-4. To fetch sequence `next`, compute `index = next - media_sequence`, verify
-   it is listed, then send `s` plus the varint index. Validate length, CRC32C,
-   header, and fixed duration. Decode each complete ECDC independently, while
-   retaining the audio sink/queue across segments. On a full-frame CRC failure,
-   send `e`; after success, request the next segment without an extra ACK.
-5. Once available segments are fetched, send `m`. Keep the playback queue
-   draining while waiting. On `n`, request `m` again; the server already waited,
-   so no tight polling loop is needed. Client read timeout must exceed the server
-   wait; 30 seconds suits the default 15-second wait plus network margin.
-6. After each delivered manifest, recompute the index for the absolute next
-   sequence. If that sequence is older than `media_sequence`, the client fell
-   behind: jump to an appropriate live-edge position, flush/rebuffer, and honor
-   epoch changes/discontinuity flags. `g` similarly triggers a refresh; repeated
-   `g` with an unchanged manifest should back off or use HTTP, not spin.
+3. Flatten epochs and initially choose a few segments behind the live edge for
+   buffering. Track the absolute sequence number to play, not only an index.
+4. Send `f` plus the varint absolute sequence for each segment. Validate the
+   returned length, CRC32C, flags, ECDC header, and fixed duration; decode each
+   complete ECDC independently while retaining the audio sink/queue. On CRC
+   failure, send `e`; after success, increment the sequence and send `f` again.
+   A one-second `n` response means retry the same sequence after about a second.
+5. If the server returns `p` to `f`, it predates this extension. Close that
+   connection, reconnect, and use the legacy `m`/`s` flow. Legacy `m` waits up
+   to `tcp_manifest_wait`; its read timeout must exceed that duration plus
+   network margin (30 seconds suits the default 15-second wait).
+6. Refresh with `m` at startup/reconnect, after `g`, or when repositioning at
+   the live edge. A segment sequence lower than `media_sequence` has aged out:
+   choose a suitable live-edge sequence, flush/rebuffer, and honor epoch changes
+   and the `S` discontinuity flag. Repeated `g` with an unchanged manifest
+   should back off or use HTTP, not spin.
 7. On TCP loss, `b`, `r`, or unsupported protocol, fetch the paired HTTPS
    `stream.pb`, using the same schema, CRC, and next absolute sequence.
    For HTTP, derive the URL as `segment-%012d.ecdc`, resolved relative to the
@@ -266,6 +284,21 @@ S -> C: 6e                         # 'n' after long-poll timeout if unchanged
 C -> S: 6d
 S -> C: 6d <varint N> <new manifest> # publication changed; indices reset
 ```
+
+With absolute fetch, after `i` provides the starting window the normal sequence
+is instead:
+
+```text
+C -> S: 66 00                            # 'f', absolute sequence 0
+S -> C: 53 b2 03 <CRC32C:4B big-endian> <flags:1B> <434 ECDC bytes>
+C -> S: 66 01                            # next absolute sequence
+S -> C: 6e                               # 'n': not published yet; retry 'f 01' later
+```
+
+For a one-byte sequence, an `f` request is two bytes. The ready reply adds eight
+bytes before the ECDC (type, two-byte length, CRC32C, flags); the not-ready
+exchange is three application bytes total. All totals exclude TCP/IP packets,
+TLS, and socket-level acknowledgements.
 
 An index under 128 costs one varint byte: two request bytes total. A 434-byte
 segment costs three response framing bytes (type + two-byte length), so fetching

@@ -111,12 +111,15 @@ class PublishedSegment:
     sequence: int
     uri: str
     byte_length: int
+    crc32c: int
+    discontinuity: bool
 
 
 @dataclass(frozen=True)
 class PublicationSnapshot:
     manifest: bytes
     segments: tuple[PublishedSegment, ...]
+    next_sequence: int
 
 
 def atomic_write(path: pathlib.Path, payload: bytes, fsync: bool = True) -> None:
@@ -312,9 +315,16 @@ class ManifestStore:
         return PublicationSnapshot(
             manifest if manifest is not None else manifest_protobuf(self.document(), self.segments),
             tuple(
-                PublishedSegment(item["sequence"], item["uri"], item["byte_length"])
+                PublishedSegment(
+                    item["sequence"],
+                    item["uri"],
+                    item["byte_length"],
+                    item["_crc32c"],
+                    item["discontinuity"],
+                )
                 for item in self.segments
             ),
+            self.next_sequence,
         )
 
     def snapshot(self) -> PublicationSnapshot:
