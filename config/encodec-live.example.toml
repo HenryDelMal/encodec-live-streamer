@@ -53,5 +53,9 @@ tcp_idle_timeout = 60.0
 # A manifest request waits up to this many seconds for a new publication.
 # Keep it below tcp_idle_timeout; the client read timeout must exceed this.
 tcp_manifest_wait = 15.0
+# Only enable after the client supports the one-byte 'h' response while waiting
+# for a manifest. It is disabled by default for older-client compatibility.
+tcp_heartbeat_enabled = false
+tcp_heartbeat_interval = 3.5
 # Extra sends of the most recently fetched segment after a client CRC error.
 tcp_max_retries = 2

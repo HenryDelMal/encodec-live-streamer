@@ -70,6 +70,18 @@ Back off subsequent TCP attempts (for example 30 s, doubling to at most 5 min)
 while HTTP playback continues. TCP and HTTP must point at the same publisher;
 deduplicate absolute sequences so a fallback does not replay audio.
 
+To detect an idle/dead connection during `m`, the updated player must recognize
+`h` as a one-byte heartbeat and continue waiting for the final `m` or `n` response.
+Reset its liveness timer on each `h`; reconnect/fallback only when heartbeats
+stop past the chosen timeout. Server heartbeats are opt-in
+(`tcp_heartbeat_enabled`, default false) so older app builds do not see an
+unknown response. Enable the server setting after deploying a client that
+handles `h`; older app versions are incompatible with heartbeats while waiting.
+The client may also send `h` between requests to check the connection; the
+server immediately echoes `h`. Do not send that probe while waiting on `m`:
+the server is long-polling, and unsolicited `h` responses already keep that
+request alive.
+
 The related Android task already contains C++ decoders and ECDC parsing for both
 profiles. No Python, PyTorch, ExecuTorch, Flutter, or server model file is needed
 on the phone.

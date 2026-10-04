@@ -38,6 +38,7 @@ class TcpTests(unittest.TestCase):
             input="unused", output_dir=Path(self.directory.name),
             fsync=False, tcp_enabled=True, tcp_port=0, tcp_manifest_wait=0.2,
             tcp_idle_timeout=2, tcp_max_clients=2, tcp_max_retries=2,
+            tcp_heartbeat_enabled=True, tcp_heartbeat_interval=0.05,
             window_segments=2, stale_grace_segments=0,
         )
         self.store = ManifestStore(self.config)
@@ -77,19 +78,40 @@ class TcpTests(unittest.TestCase):
         connection.sendall(b"os\x00")
         self.assertEqual(receive_payload(connection, b"s"), payload)
 
+    def test_client_heartbeat_probe_is_echoed(self):
+        connection = self.connect()
+        self.initialize(connection)
+        connection.sendall(b"h")
+        self.assertEqual(receive_exact(connection, 1), b"h")
+
     def test_no_change_waits_and_publication_wakes_waiters(self):
         self.publish()
         connection = self.connect()
         previous = self.initialize(connection)
         started = time.monotonic()
         connection.sendall(b"m")
-        self.assertEqual(receive_exact(connection, 1), b"n")
+        heartbeats = 0
+        response = receive_exact(connection, 1)
+        while response == b"h":
+            heartbeats += 1
+            response = receive_exact(connection, 1)
+        self.assertEqual(response, b"n")
+        self.assertGreater(heartbeats, 0)
         self.assertGreaterEqual(time.monotonic() - started, 0.15)
         connection.sendall(b"m")
         self.publish()
         current = receive_payload(connection, b"m")
         self.assertNotEqual(current, previous)
         self.assertEqual(current, self.store.protobuf_path.read_bytes())
+
+    def test_manifest_change_replaces_heartbeat_with_manifest(self):
+        self.publish()
+        connection = self.connect()
+        self.initialize(connection)
+        connection.sendall(b"m")
+        self.assertEqual(receive_exact(connection, 1), b"h")
+        self.publish()
+        self.assertEqual(receive_payload(connection, b"m"), self.store.snapshot().manifest)
 
     def test_index_stays_relative_to_last_sent_manifest_after_rollover(self):
         payload = self.publish()

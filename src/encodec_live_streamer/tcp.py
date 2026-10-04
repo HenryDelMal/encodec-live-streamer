@@ -5,6 +5,7 @@ import logging
 import socket
 import socketserver
 import threading
+import time
 
 from .config import Config
 from .manifest import ManifestStore, PublicationSnapshot
@@ -75,11 +76,31 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                         current = server.store.snapshot()
                     else:
                         assert window is not None
-                        current = server.store.wait_snapshot(
-                            window.manifest,
-                            server.config.tcp_manifest_wait,
-                            server.stopping,
-                        )
+                        deadline = time.monotonic() + server.config.tcp_manifest_wait
+                        current = server.store.snapshot()
+                        while (
+                            current.manifest == window.manifest
+                            and not server.stopping.is_set()
+                        ):
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                break
+                            interval = remaining
+                            if server.config.tcp_heartbeat_enabled:
+                                interval = min(
+                                    interval,
+                                    server.config.tcp_heartbeat_interval,
+                                )
+                            current = server.store.wait_snapshot(
+                                window.manifest, interval, server.stopping
+                            )
+                            if (
+                                current.manifest == window.manifest
+                                and not server.stopping.is_set()
+                                and server.config.tcp_heartbeat_enabled
+                                and time.monotonic() < deadline
+                            ):
+                                connection.sendall(b"h")
                     if server.stopping.is_set():
                         return
                     if command == b"m" and current.manifest == window.manifest:
@@ -87,6 +108,11 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                     else:
                         send_payload(connection, b"m", current.manifest)
                         window = current
+                elif command == b"h":
+                    # Client-initiated probe, valid between other requests.
+                    # During an outstanding m, unsolicited h bytes are sent
+                    # periodically instead; clients should not send commands then.
+                    connection.sendall(b"h")
                 elif command == b"s":
                     assert window is not None
                     index = read_varint(connection)

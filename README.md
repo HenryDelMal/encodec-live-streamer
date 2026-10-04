@@ -404,6 +404,7 @@ to the existing `[stream]` TOML table to accept remote IPv4 clients:
 tcp_enabled = true
 tcp_host = "0.0.0.0"
 tcp_port = 9001
+tcp_heartbeat_enabled = true
 ```
 
 TCP is disabled by default and defaults to a loopback bind address. Allow the
@@ -415,8 +416,11 @@ needs its own port.
 Requests usually cost two bytes per segment. The response adds one type byte
 and a varint length to the ECDC data; CRC32C is already in the manifest. Manifest
 requests wait for publication changes and return a one-byte response when
-unchanged. Success acknowledgements are optional because TCP already handles
-delivery. The listener bounds client count, idle time, and CRC retry count.
+unchanged. If enabled, the server sends a one-byte `h` heartbeat during that
+wait; enable it only after the client recognizes `h`. Between requests, a client
+may also send `h` and expect the server to echo `h`. Success acknowledgements
+are optional because TCP already handles delivery. The listener bounds client
+count, idle time, and CRC retry count.
 
 The direct listener is plain TCP without TLS or authentication. Configure the
 client with a TCP host/port and a paired HTTPS manifest URL for fallback when

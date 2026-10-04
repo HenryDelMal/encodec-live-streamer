@@ -127,6 +127,8 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(config.tcp_enabled)
             self.assertEqual(config.tcp_host, "0.0.0.0")
             self.assertEqual(config.tcp_port, 9900)
+            self.assertFalse(config.tcp_heartbeat_enabled)
+            self.assertEqual(config.tcp_heartbeat_interval, 3.5)
 
     def test_tcp_limits_and_types(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -135,6 +137,7 @@ class ConfigTests(unittest.TestCase):
                 {"tcp_port": 65536}, {"tcp_port": True}, {"tcp_max_clients": 0},
                 {"tcp_max_retries": -1}, {"tcp_idle_timeout": float("nan")},
                 {"tcp_manifest_wait": 0}, {"tcp_manifest_wait": 60},
+                {"tcp_heartbeat_enabled": 1}, {"tcp_heartbeat_interval": 0},
             ):
                 with self.subTest(values=values), self.assertRaisesRegex(ValueError, "tcp_"):
                     Config(input="x", output_dir=Path(directory), **values).validate()

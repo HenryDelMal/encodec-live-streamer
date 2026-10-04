@@ -44,6 +44,8 @@ tcp_port = 9001
 tcp_max_clients = 32
 tcp_idle_timeout = 60.0
 tcp_manifest_wait = 15.0
+tcp_heartbeat_enabled = true
+tcp_heartbeat_interval = 3.5
 tcp_max_retries = 2
 ```
 
@@ -61,6 +63,14 @@ continue indefinitely. Configure the client's manifest-response timeout above
 `tcp_max_retries` (zero disables retries). Listener bind failures fail service
 startup rather than silently pretending TCP is enabled. Shutdown wakes waiters
 and closes sockets; service restart requires clients to reconnect and initialize.
+
+The optional heartbeat is disabled by default for compatibility. Enable it only
+after clients handle `h`. While a client is waiting on `m`, the server sends `h`
+every `tcp_heartbeat_interval` seconds until a manifest changes or the total
+`tcp_manifest_wait` expires. The change produces `m`; the unchanged deadline
+produces `n`. The heartbeat interval does not extend the wait deadline. Set the
+client read timeout above the heartbeat interval with network margin, and above
+the manifest wait if it allows one uninterrupted `m` wait.
 
 The listener is plain TCP without encryption or authentication. Use a trusted
 network or a separately configured TLS tunnel if needed. TCP failure or blocked
@@ -108,6 +118,7 @@ needed and responses always correspond to the pending request.
 | `s` + varint index | Fetch a segment | Index is zero-based in the flattened segment list of the last manifest sent on this connection. Sends `s` with raw ECDC or `g`. |
 | `e` | CRC error after a complete segment response | Resends the cached last segment with an `s` frame, up to the retry limit. |
 | `o` | Optional success ACK | Frees the retry cache. No response. |
+| `h` | Client-initiated liveness probe | Server immediately echoes one byte `h`. Send only between requests, not while awaiting `m`. |
 | `q` | Close | Closes the connection. No response. Ordinary socket close also suffices. |
 
 A new `s`, `i`, or `m` implicitly acknowledges the previous segment and clears
@@ -121,6 +132,9 @@ refresh even if unchanged. An initial empty manifest is valid: it has no epoch
 groups, and `media_sequence` is the next sequence to publish. Then request `m`
 until segments are available. An unchanged finite/stalled source returns `n`
 after each long-poll deadline, rather than spinning or claiming end-of-stream.
+For an explicit probe, send `h` only when no other response is pending and
+expect one `h` byte. While `m` is pending, do not send commands; treat server
+`h` bytes as heartbeats for that request until the final `m` or `n` arrives.
 
 ## Server responses
 
@@ -129,6 +143,7 @@ after each long-poll deadline, rather than spinning or claiming end-of-stream.
 | `m` | varint length + protobuf v2 | Replace the connection's manifest/index mapping. |
 | `s` | varint length + complete ECDC | Validate length and manifest CRC32C, then decode. |
 | `n` | None | Manifest unchanged after the wait; issue another `m` when ready. |
+| `h` | None | During `m`, a server heartbeat; keep waiting and reset the client's liveness timer. Also the echo for a client `h` probe sent between requests. |
 | `g` | None | Index unavailable, file expired/missing, or file length inconsistent; refresh with `m`/`i` and rebuffer if behind. |
 | `b` | None, followed by close | Client capacity exhausted; use HTTP/backoff. May arrive before init. |
 | `p` | None, followed by close | Protocol violation (unknown command, missing init, malformed varint, retry without a cached segment). |

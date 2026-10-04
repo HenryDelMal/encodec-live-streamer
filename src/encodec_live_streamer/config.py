@@ -58,6 +58,8 @@ class Config:
     tcp_max_clients: int = 32
     tcp_idle_timeout: float = 60.0
     tcp_manifest_wait: float = 15.0
+    tcp_heartbeat_enabled: bool = False
+    tcp_heartbeat_interval: float = 3.5
     tcp_max_retries: int = 2
 
     @property
@@ -146,6 +148,8 @@ class Config:
             raise ValueError("manifest_name must be a file name, not a path")
         if not isinstance(self.tcp_enabled, bool):
             raise ValueError("tcp_enabled must be a boolean")
+        if not isinstance(self.tcp_heartbeat_enabled, bool):
+            raise ValueError("tcp_heartbeat_enabled must be a boolean")
         if not isinstance(self.tcp_host, str) or not self.tcp_host.strip():
             raise ValueError("tcp_host must be a nonempty bind address")
         for name, minimum, maximum in (
@@ -163,6 +167,7 @@ class Config:
         for name, minimum, maximum in (
             ("tcp_idle_timeout", 1, 3600),
             ("tcp_manifest_wait", 0.1, 300),
+            ("tcp_heartbeat_interval", 0.1, 60),
         ):
             value = getattr(self, name)
             if (
