@@ -415,16 +415,17 @@ needs its own port.
 
 Legacy clients fetch by manifest-relative index (`s`). Updated clients can use
 `f` plus the absolute sequence number to fetch the next segment without asking
-for a new manifest each time. The server briefly waits for that sequence, then
+for a new manifest each time. The server waits up to `tcp_manifest_wait`
+(15 seconds by default) for that sequence, then
 returns its ECDC bytes, CRC32C, and discontinuity flag (`S`); if it is not ready,
-the client gets a one-byte `n` and retries later. This ready response costs the
+the client gets a one-byte `n` and retries immediately. This ready response costs the
 request bytes plus about 8 framing/metadata bytes and the segment itself; a
 not-ready probe costs the request bytes plus one byte. `m` manifest requests
 remain available for startup, reconnects, and resynchronization. Older clients
 continue to use `s` unchanged; clients should fall back to `m`/`s` if an older
 server rejects `f`.
 
-Manifest requests wait for publication changes and return a one-byte response
+Manifest and absolute-sequence requests wait for publication and return a one-byte response
 when unchanged. If enabled, the server sends a one-byte `h` heartbeat during
 that wait; enable it only after the client recognizes `h`. Between requests, a
 client may also send `h` and expect the server to echo `h`. Success

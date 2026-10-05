@@ -59,7 +59,8 @@ IPv4. Each service instance must use a distinct address/port pair. The
 provided systemd unit can listen on an unprivileged port without extra socket
 activation or capabilities. There is no separate TCP process or nginx location.
 
-`tcp_manifest_wait` must be shorter than `tcp_idle_timeout`. The idle timeout
+`tcp_manifest_wait` sets the maximum long-poll wait for both `m` and `f`
+(default 15 seconds) and must be shorter than `tcp_idle_timeout`. The idle timeout
 bounds socket reads/writes, not the stream lifetime: active connections may
 continue indefinitely. Configure the client's manifest-response timeout above
 `tcp_manifest_wait` plus network margin. The maximum extra CRC sends is
@@ -68,12 +69,13 @@ startup rather than silently pretending TCP is enabled. Shutdown wakes waiters
 and closes sockets; service restart requires clients to reconnect and initialize.
 
 The optional heartbeat is disabled by default for compatibility. Enable it only
-after clients handle `h`. While a client is waiting on `m`, the server sends `h`
-every `tcp_heartbeat_interval` seconds until a manifest changes or the total
-`tcp_manifest_wait` expires. The change produces `m`; the unchanged deadline
+after clients handle `h` during both `m` and `f`. While waiting, the server sends
+`h` every `tcp_heartbeat_interval` seconds until the requested manifest changes
+or segment arrives, or the total `tcp_manifest_wait` expires. Publication
+produces `m` or `S`; the unchanged deadline
 produces `n`. The heartbeat interval does not extend the wait deadline. Set the
 client read timeout above the heartbeat interval with network margin, and above
-the manifest wait if it allows one uninterrupted `m` wait.
+the full wait if heartbeats are disabled. Heartbeats do not imply audio publication.
 
 The listener is plain TCP without encryption or authentication. Use a trusted
 network or a separately configured TLS tunnel if needed. TCP failure or blocked
@@ -122,10 +124,10 @@ needed and responses always correspond to the pending request.
 | `i` | Initialize/reset connection | Immediately sends `m` plus the latest protobuf manifest; establishes the index mapping. Required first command. |
 | `m` | Ask for a changed manifest | Sends a new `m` frame immediately if changed, otherwise waits up to `tcp_manifest_wait`; replies `n` if still unchanged. |
 | `s` + varint index | Fetch a segment | Index is zero-based in the flattened segment list of the last manifest sent on this connection. Sends `s` with raw ECDC or `g`. |
-| `f` + varint sequence | Fetch by absolute sequence | Sequence is the global ECDC sequence number, independent of the last manifest. The server waits up to one second for a not-yet-published sequence; it sends `S` with ECDC and metadata when available, `n` if it is still in the future, or `g` if stale/missing. |
+| `f` + varint sequence | Fetch by absolute sequence | Sequence is the global ECDC sequence number, independent of the last manifest. The server waits up to `tcp_manifest_wait` for a not-yet-published sequence, with optional `h` heartbeats; it sends `S` when available, `n` at the deadline, or `g` if stale/missing. |
 | `e` | CRC error after a complete segment response | Resends the cached last segment with its original framing (`s` or `S`), up to the retry limit. |
 | `o` | Optional success ACK | Frees the retry cache. No response. |
-| `h` | Client-initiated liveness probe | Server immediately echoes one byte `h`. Send only between requests, not while awaiting `m`. |
+| `h` | Client-initiated liveness probe | Server immediately echoes one byte `h`. Send only between requests, not while awaiting `m` or `f`. |
 | `q` | Close | Closes the connection. No response. Ordinary socket close also suffices. |
 
 A new `s`, `f`, `i`, or `m` implicitly acknowledges the previous segment and clears
@@ -140,8 +142,8 @@ groups, and `media_sequence` is the next sequence to publish. Then request `m`
 until segments are available. An unchanged finite/stalled source returns `n`
 after each long-poll deadline, rather than spinning or claiming end-of-stream.
 For an explicit probe, send `h` only when no other response is pending and
-expect one `h` byte. While `m` is pending, do not send commands; treat server
-`h` bytes as heartbeats for that request until the final `m` or `n` arrives.
+expect one `h` byte. While `m` or `f` is pending, do not send commands; treat server
+`h` bytes as heartbeats until the final response arrives.
 
 ## Server responses
 
@@ -151,14 +153,15 @@ expect one `h` byte. While `m` is pending, do not send commands; treat server
 | `s` | varint length + complete ECDC | Validate length and manifest CRC32C, then decode. |
 | `S` | varint length + CRC32C (4-byte big-endian) + flags (1 byte) + complete ECDC | Reply to `f`. Check ECDC length and CRC32C. Bit 0 of flags means this segment begins a discontinuity; all other bits are reserved and must be zero. |
 | `n` | None | For `m`, the manifest was unchanged after the wait. For `f`, that sequence is not published yet; retry it later. |
-| `h` | None | During `m`, a server heartbeat; keep waiting and reset the client's liveness timer. Also the echo for a client `h` probe sent between requests. |
+| `h` | None | During `m` or `f`, a server heartbeat; keep waiting and reset the client's liveness timer. Also the echo for a client `h` probe sent between requests. |
 | `g` | None | Requested segment is stale/unavailable or its file is missing/inconsistent; refresh with `m`/`i` and rebuffer if behind. |
 | `b` | None, followed by close | Client capacity exhausted; use HTTP/backoff. May arrive before init. |
 | `p` | None, followed by close | Protocol violation (unknown command, missing init, malformed varint, retry without a cached segment). |
 | `r` | None, followed by close | CRC retry limit exhausted; reconnect or use HTTP. |
 
 For `f`, `n` means the requested absolute sequence is not published yet; retry
-the same sequence after about one second. `f` is a single request/response (no
+the same sequence immediately: the server already waited for the configured
+deadline. `f` is a single request/response (no
 manifest is needed between sequential segment requests). On startup or after
 reconnect, use `i` to obtain the current window and choose a starting absolute
 sequence; then increment it after each `S` response. Refresh with `m` when
@@ -241,7 +244,8 @@ audio length inconsistent with `segment_duration_samples`.
    returned length, CRC32C, flags, ECDC header, and fixed duration; decode each
    complete ECDC independently while retaining the audio sink/queue. On CRC
    failure, send `e`; after success, increment the sequence and send `f` again.
-   A one-second `n` response means retry the same sequence after about a second.
+   On `h`, keep waiting. On `n`, immediately retry the same sequence; the server
+   already waited up to `tcp_manifest_wait`.
 5. If the server returns `p` to `f`, it predates this extension. Close that
    connection, reconnect, and use the legacy `m`/`s` flow. Legacy `m` waits up
    to `tcp_manifest_wait`; its read timeout must exceed that duration plus

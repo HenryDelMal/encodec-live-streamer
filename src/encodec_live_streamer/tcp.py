@@ -13,7 +13,6 @@ from .manifest import ManifestStore, PublicationSnapshot, PublishedSegment
 
 
 LOG = logging.getLogger(__name__)
-SEGMENT_WAIT_SECONDS = 1.0
 
 
 class ProtocolError(ValueError):
@@ -152,13 +151,16 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                     connection.sendall(last_segment_response)
                 elif command == b"f":
                     # Fetch by absolute sequence without requiring a fresh manifest.
-                    # A future sequence is held for up to one second so publication
-                    # can satisfy it; otherwise n tells the client to retry later.
+                    # Share the configured long-poll deadline with m. Heartbeats
+                    # maintain liveness without extending that deadline.
                     sequence = read_varint(connection)
                     last_segment_response = None
                     retries = 0
-                    deadline = time.monotonic() + SEGMENT_WAIT_SECONDS
+                    deadline = time.monotonic() + server.config.tcp_manifest_wait
+                    next_heartbeat = time.monotonic() + server.config.tcp_heartbeat_interval
                     while True:
+                        if server.stopping.is_set():
+                            return
                         current = server.store.snapshot()
                         first_sequence = (
                             current.segments[0].sequence
@@ -186,10 +188,24 @@ class _RequestHandler(socketserver.BaseRequestHandler):
                             connection.sendall(last_segment_response)
                             break
                         remaining = deadline - time.monotonic()
-                        if remaining <= 0 or server.stopping.is_set():
+                        if remaining <= 0:
                             connection.sendall(b"n")
                             break
-                        server.store.wait_snapshot(current.manifest, remaining, server.stopping)
+                        interval = remaining
+                        if server.config.tcp_heartbeat_enabled:
+                            interval = min(interval, max(0, next_heartbeat - time.monotonic()))
+                        updated = server.store.wait_snapshot(
+                            current.manifest, interval, server.stopping
+                        )
+                        now = time.monotonic()
+                        if (
+                            server.config.tcp_heartbeat_enabled
+                            and not server.stopping.is_set()
+                            and updated.next_sequence <= sequence
+                            and next_heartbeat <= now < deadline
+                        ):
+                            connection.sendall(b"h")
+                            next_heartbeat = now + server.config.tcp_heartbeat_interval
                 elif command == b"e":
                     if last_segment_response is None:
                         raise ProtocolError("no segment available to retry")

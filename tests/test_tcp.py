@@ -1,3 +1,4 @@
+import dataclasses
 import socket
 import struct
 import tempfile
@@ -30,7 +31,10 @@ def receive_payload(connection, expected):
 
 
 def receive_absolute_segment(connection):
-    if receive_exact(connection, 1) != b"S":
+    kind = receive_exact(connection, 1)
+    while kind == b"h":
+        kind = receive_exact(connection, 1)
+    if kind != b"S":
         raise AssertionError("expected absolute-sequence segment response")
     length = read_varint(connection)
     checksum = struct.unpack(">I", receive_exact(connection, 4))[0]
@@ -156,6 +160,7 @@ class TcpTests(unittest.TestCase):
         connection = self.connect()
         self.initialize(connection)
         connection.sendall(b"f" + encode_varint(1))
+        self.assertEqual(receive_exact(connection, 1), b"h")
         publisher = threading.Thread(target=self.publish)
         publisher.start()
         body, checksum, flags = receive_absolute_segment(connection)
@@ -174,7 +179,35 @@ class TcpTests(unittest.TestCase):
         connection.sendall(b"f" + encode_varint(0))
         self.assertEqual(receive_exact(connection, 1), b"g")
         connection.sendall(b"f" + encode_varint(3))
+        started = time.monotonic()
+        response = receive_exact(connection, 1)
+        heartbeats = 0
+        while response == b"h":
+            heartbeats += 1
+            response = receive_exact(connection, 1)
+        self.assertEqual(response, b"n")
+        self.assertGreater(heartbeats, 0)
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_absolute_wait_without_heartbeats_returns_only_final_status(self):
+        self.server._server.config = dataclasses.replace(
+            self.config, tcp_heartbeat_enabled=False
+        )
+        connection = self.connect()
+        self.initialize(connection)
+        started = time.monotonic()
+        connection.sendall(b"f\x00")
         self.assertEqual(receive_exact(connection, 1), b"n")
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
+
+    def test_shutdown_wakes_absolute_fetch_waiter(self):
+        connection = self.connect()
+        self.initialize(connection)
+        connection.sendall(b"f\x00")
+        self.assertEqual(receive_exact(connection, 1), b"h")
+        self.server.close()
+        self.assertEqual(connection.recv(1), b"")
 
     def test_retry_uses_cached_bytes_even_after_cleanup_then_caps_retries(self):
         payload = self.publish()
