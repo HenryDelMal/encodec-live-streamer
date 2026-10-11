@@ -50,6 +50,8 @@ tcp_manifest_wait = 15.0
 tcp_heartbeat_enabled = true
 tcp_heartbeat_interval = 3.5
 tcp_max_retries = 2
+tcp_diagnostics = false
+tcp_segment_cache_bytes = 8388608
 ```
 
 Defaults: disabled, host `127.0.0.1`, port 9001. Bind to an interface address,
@@ -81,6 +83,98 @@ The listener is plain TCP without encryption or authentication. Use a trusted
 network or a separately configured TLS tunnel if needed. TCP failure or blocked
 ports are handled by the client's paired HTTPS endpoint. HTTP publication is
 not conditional on TCP being enabled.
+
+## Startup path, cache and timing diagnostics
+
+`i` returns the latest complete published snapshot immediately, including an
+empty snapshot. It never enters the `m`/`f` publication wait. Reconnecting clients
+must send `i` again to establish the current legacy index mapping, choose a safe
+absolute sequence, then send `f` immediately. No startup `h` probe, success ACK,
+or manifest refresh is required between consecutive successful `f` requests.
+
+The protobuf payload was already serialized during publication. The complete
+`m + length + protobuf` frame is now also prepared there. A short condition lock
+captures the immutable snapshot pointer; serialization, encoding, filesystem
+operations, and client writes all occur outside that lock. `TCP_NODELAY` is set
+at accept, before handler dispatch and before any capacity or normal response.
+Every response frame uses one `sendall`, which handles partial kernel writes.
+
+When TCP is enabled, the publisher also prepares immutable `S` and legacy `s`
+frames from the encoded bytes and the already computed CRC32C. The shared cache
+is bounded by `tcp_segment_cache_bytes` (default 8 MiB, allowed 0 through 1 GiB)
+**and** `window_segments + stale_grace_segments`. The byte budget counts both
+complete frame copies, including their framing; oldest entries are evicted first.
+A segment larger than the budget is served from disk. Set the budget to zero
+to disable caching. Cache misses retain the existing file read and length check.
+Startup preloads the compatible manifest's active segments before accepting
+clients. Absolute fetches can also use grace segments whose metadata is known
+to this publisher; a restart only restores metadata from the active manifest.
+
+This budget describes the shared retained frame cache, rather than total process
+RSS. Publication can temporarily hold the old and replacement snapshot; client
+writes and the existing one-frame-per-client CRC retry cache can retain a frame
+beyond cleanup. Idle clients keep only their legacy manifest/index metadata and
+one retry frame, rather than pinning a historical shared cache. Disk cleanup and
+retry limits are unchanged. Available `f` requests never sleep; genuinely future
+sequences use condition notification, existing heartbeats, and the existing deadline.
+
+Enable `tcp_diagnostics = true` to log JSON records prefixed `ELTCP timing` at INFO.
+Connection acceptance records include a connection ID and UTC timestamp. Each
+successful write, including a wait heartbeat, records:
+
+| Field | Meaning |
+| --- | --- |
+| `connection_id`, `command`, `sequence` | Connection, request, and absolute sequence where applicable. |
+| `request_bytes`, `response_bytes`, `response` | Complete request and individual response frame size/type. |
+| `accepted_utc`, `write_start_utc`, `write_complete_utc` | UTC correlation timestamps. |
+| `accept_to_command_ms` | Accept to receipt of the complete command, including its varint. For later commands this is connection age, not a new accept delay. |
+| `snapshot_lock_wait_ms`, `snapshot_lookup_ms` | Accumulated condition lock acquisition and snapshot capture durations. |
+| `manifest_cache_hit`, `manifest_preparation_ms` | Published manifest frame reuse; preparation is zero in the response path. |
+| `segment_lookup_ms`, `segment_cache_hit` | Segment/frame lookup and whether the retained or retry frame was used. |
+| `file_read_ms`, `frame_preparation_ms` | Disk fallback and frame assembly, zero on a frame cache hit. |
+| `checksum_preparation_ms` | Zero: CRC32C was computed by the publisher and reused. |
+| `publication_wait_ms` | Accumulated time in condition waits for an unpublished segment or unchanged manifest. |
+| `write_ms` | Duration of the individual `sendall` call. |
+| `command_to_write_complete_ms` | Complete command receipt to completion of this write, including publication waits and previous heartbeat writes. |
+| `processing_ms` | The previous duration minus publication waits; includes socket backpressure and scheduling. |
+| `diagnostics_dropped` | Cumulative records dropped when the diagnostic queue was full. |
+
+Durations use the monotonic clock. Stage fields are diagnostic observations,
+not necessarily additive CPU-time measurements. Write completion means the
+bytes were handed to the local socket; it does **not** mean Android received or
+decoded them. A blocked socket increases write time without holding the
+publication lock. Record construction and nonblocking queue insertion happen
+in the client thread; JSON formatting and log output use a separate daemon
+thread. The queue holds at most 1024 records and drops new records when full,
+so a slow journal or log handler cannot stall a response. Diagnostics default
+to disabled and require no protocol change.
+
+The development measurements used 12 synthetic 990-byte ECDC files, a 142-byte
+manifest, and 200 reconnect/`i`/existing-`f` sessions on loopback. They measure
+server stages separately from local transport and do not measure encoding
+quality, Linux deployment load, or mobile transport/playback latency. No
+benchmark is required to deploy these changes.
+
+Measured on macOS, Python 3.14.7, with diagnostics enabled:
+
+| Server duration | Median ms | p95 ms |
+| --- | ---: | ---: |
+| `i`: complete command to write completion | 0.0090 | 0.0269 |
+| `f`: cached, complete command to write completion | 0.0081 | 0.0128 |
+| `f`: uncached, complete command to write completion | 0.0307 | 0.0386 |
+| Uncached segment file read | 0.0209 | 0.0290 |
+| `i` snapshot lock acquisition | 0.000208 | 0.000459 |
+| Cached `f` socket write | 0.003375 | 0.005209 |
+
+Both available-response paths had zero publication wait. The separate future
+fetch measured 83.81 ms publication wait and 0.210 ms remaining processing,
+including heartbeat writes. Loopback medians were 0.105 ms for `i` and 0.062 ms
+for cached `f`; these include local transport and thread scheduling. The original
+code's earlier 200-session smoke measurement was about 0.110/0.108 ms, but used
+a smaller one-segment manifest and is not an identical-workload comparison.
+These measurements cannot attribute the reported mobile manifest delay to the
+server or predict device startup improvement. Correlate the deployed server's
+UTC records with fresh OndaBaja sessions after removing its startup echo probe.
 
 ## Integer encoding and framing
 

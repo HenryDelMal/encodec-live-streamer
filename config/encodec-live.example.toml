@@ -59,3 +59,7 @@ tcp_heartbeat_enabled = false
 tcp_heartbeat_interval = 3.5
 # Extra sends of the most recently fetched segment after a client CRC error.
 tcp_max_retries = 2
+# Optional asynchronous timing logs (monotonic durations and UTC correlation).
+tcp_diagnostics = false
+# Combined cached S/s frame bytes; 0 disables caching. Also limited to window + grace.
+tcp_segment_cache_bytes = 8388608

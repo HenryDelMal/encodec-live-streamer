@@ -61,6 +61,8 @@ class Config:
     tcp_heartbeat_enabled: bool = False
     tcp_heartbeat_interval: float = 3.5
     tcp_max_retries: int = 2
+    tcp_diagnostics: bool = False
+    tcp_segment_cache_bytes: int = 8 * 1024 * 1024
 
     @property
     def profile(self) -> dict[str, Any]:
@@ -150,6 +152,12 @@ class Config:
             raise ValueError("tcp_enabled must be a boolean")
         if not isinstance(self.tcp_heartbeat_enabled, bool):
             raise ValueError("tcp_heartbeat_enabled must be a boolean")
+        if not isinstance(self.tcp_diagnostics, bool):
+            raise ValueError("tcp_diagnostics must be a boolean")
+        if (isinstance(self.tcp_segment_cache_bytes, bool)
+                or not isinstance(self.tcp_segment_cache_bytes, int)
+                or not 0 <= self.tcp_segment_cache_bytes <= 1024 * 1024 * 1024):
+            raise ValueError("tcp_segment_cache_bytes must be between 0 and 1073741824")
         if not isinstance(self.tcp_host, str) or not self.tcp_host.strip():
             raise ValueError("tcp_host must be a nonempty bind address")
         for name, minimum, maximum in (

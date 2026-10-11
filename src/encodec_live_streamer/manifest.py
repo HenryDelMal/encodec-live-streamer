@@ -8,6 +8,10 @@ import re
 import struct
 import tempfile
 import threading
+import time
+from collections import OrderedDict
+from types import MappingProxyType
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -113,6 +117,8 @@ class PublishedSegment:
     byte_length: int
     crc32c: int
     discontinuity: bool
+    absolute_frame: bytes | None = None
+    legacy_frame: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,8 @@ class PublicationSnapshot:
     manifest: bytes
     segments: tuple[PublishedSegment, ...]
     next_sequence: int
+    manifest_frame: bytes
+    retained_segments: Mapping[int, PublishedSegment]
 
 
 def atomic_write(path: pathlib.Path, payload: bytes, fsync: bool = True) -> None:
@@ -161,6 +169,17 @@ class ManifestStore:
         self.discontinuity_sequence = 0
         self.next_sequence = self._next_sequence_on_disk()
         self._load_compatible_manifest()
+        self._retained: dict[int, PublishedSegment] = {}
+        self._frames: OrderedDict[int, tuple[bytes, bytes]] = OrderedDict()
+        self._cache_bytes = 0
+        # Restore cache outside any reader lock before accepting clients.
+        for item in self.segments:
+            try:
+                payload = (self.output_dir / item["uri"]).read_bytes()
+            except FileNotFoundError:
+                continue
+            if len(payload) == item["byte_length"]:
+                self._cache_segment(item, payload)
         self._publication_changed = threading.Condition()
         self._snapshot = self._make_snapshot()
 
@@ -278,6 +297,7 @@ class ManifestStore:
             "_crc32c": crc32c(payload),
         }
         self.next_sequence += 1
+        self._cache_segment(segment, payload)
         self.segments.append(segment)
         if len(self.segments) > self.config.window_segments:
             removed = self.segments[: -self.config.window_segments]
@@ -312,25 +332,63 @@ class ManifestStore:
         return document
 
     def _make_snapshot(self, manifest: bytes | None = None) -> PublicationSnapshot:
+        manifest = manifest if manifest is not None else manifest_protobuf(self.document(), self.segments)
+        for item in self.segments:
+            frames = self._frames.get(item["sequence"], (None, None))
+            self._retained[item["sequence"]] = PublishedSegment(
+                item["sequence"], item["uri"], item["byte_length"],
+                item["_crc32c"], item["discontinuity"], *frames,
+            )
+        first = self.segments[0]["sequence"] if self.segments else self.next_sequence
+        keep_from = max(0, first - self.config.stale_grace_segments)
+        self._retained = {seq: item for seq, item in self._retained.items() if seq >= keep_from}
+        for seq in list(self._frames):
+            if seq < keep_from:
+                frames = self._frames.pop(seq)
+                self._cache_bytes -= sum(map(len, frames))
+        # Snapshot entries must reflect byte-budget evictions, including grace entries.
+        retained = {}
+        for seq, item in self._retained.items():
+            frames = self._frames.get(seq, (None, None))
+            retained[seq] = PublishedSegment(item.sequence, item.uri, item.byte_length,
+                                            item.crc32c, item.discontinuity, *frames)
+        self._retained = retained
         return PublicationSnapshot(
-            manifest if manifest is not None else manifest_protobuf(self.document(), self.segments),
-            tuple(
-                PublishedSegment(
-                    item["sequence"],
-                    item["uri"],
-                    item["byte_length"],
-                    item["_crc32c"],
-                    item["discontinuity"],
-                )
-                for item in self.segments
-            ),
+            manifest,
+            tuple(PublishedSegment(item["sequence"], item["uri"], item["byte_length"],
+                                   item["_crc32c"], item["discontinuity"])
+                  for item in self.segments),
             self.next_sequence,
+            b"m" + _protobuf_varint(len(manifest)) + manifest,
+            MappingProxyType(retained),
         )
 
-    def snapshot(self) -> PublicationSnapshot:
+    def _cache_segment(self, item: dict[str, Any], payload: bytes) -> None:
+        if not self.config.tcp_enabled or not self.config.tcp_segment_cache_bytes:
+            return
+        length = _protobuf_varint(len(payload))
+        cost = 2 * (1 + len(length) + len(payload)) + 5
+        if cost > self.config.tcp_segment_cache_bytes:
+            return
+        while self._frames and self._cache_bytes + cost > self.config.tcp_segment_cache_bytes:
+            _, frames = self._frames.popitem(last=False)
+            self._cache_bytes -= sum(map(len, frames))
+        absolute = (b"S" + length + struct.pack(">I", item["_crc32c"])
+                    + bytes((int(item["discontinuity"]),)) + payload)
+        legacy = b"s" + length + payload
+        self._frames[item["sequence"]] = (absolute, legacy)
+        self._cache_bytes += cost
+
+    def snapshot(self, timings: dict[str, Any] | None = None) -> PublicationSnapshot:
         """Return one immutable window shared by all TCP readers."""
+        started = time.monotonic_ns() if timings is not None else 0
         with self._publication_changed:
-            return self._snapshot
+            acquired = time.monotonic_ns() if timings is not None else 0
+            snapshot = self._snapshot
+        if timings is not None:
+            timings["snapshot_lock_wait_ms"] += (acquired - started) / 1e6
+            timings["snapshot_lookup_ms"] += (time.monotonic_ns() - acquired) / 1e6
+        return snapshot
 
     def wait_snapshot(
         self, previous: bytes, timeout: float, stopping: threading.Event
