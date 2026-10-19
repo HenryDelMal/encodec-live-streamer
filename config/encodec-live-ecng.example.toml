@@ -1,0 +1,26 @@
+[stream]
+codec = "ECNG"
+input = "https://radio.example/live.mp3"
+output_dir = "/opt/encodec-live/public"
+
+# The jointly trained ECNG model is 24 kHz mono and supports 1.5 or 3 kbps.
+native_encoder = "/opt/encodec-live-streamer/bin/encodec-live-native"
+model_dir = "/opt/encodec-live/models"
+samplerate = 24
+bandwidth_kbps = 3
+segment_duration = 1.9866666666666666
+window_segments = 16
+stale_grace_segments = 6
+threads = 1
+beam_size = 1
+
+ffmpeg = "/usr/bin/ffmpeg"
+restart_ffmpeg = true
+restart_delay = 2.0
+manifest_name = "stream.json"
+fsync = true
+
+# Optional TCP transport remains off unless enabled for a compatible client.
+tcp_enabled = false
+tcp_host = "127.0.0.1"
+tcp_port = 9001

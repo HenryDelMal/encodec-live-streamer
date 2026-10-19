@@ -20,7 +20,7 @@ from .config import Config
 from .ecdc import parse_header
 
 
-SEGMENT_RE = re.compile(r"^segment-(\d{12})\.ecdc$")
+SEGMENT_RE = re.compile(r"^segment-(\d{12})\.(?:ecdc|ecng)$")
 
 
 def _protobuf_varint(value: int) -> bytes:
@@ -280,7 +280,8 @@ class ManifestStore:
         self.epoch_start_by_id[epoch] = int(epoch_start_unix_ms)
 
         sequence = self.next_sequence
-        uri = f"segment-{sequence:012d}.ecdc"
+        extension = "ecng" if self.config.codec == "ECNG" else "ecdc"
+        uri = f"segment-{sequence:012d}.{extension}"
         atomic_write(self.output_dir / uri, payload, self.config.fsync)
         segment = {
             "sequence": sequence,

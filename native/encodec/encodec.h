@@ -15,6 +15,7 @@ namespace encodec
         unsigned int max_quantizers{};
         bool causal{};
         bool normalized{};
+        bool ecng{};
     };
 
     struct encoded_frame

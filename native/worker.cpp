@@ -19,6 +19,7 @@ constexpr std::size_t HQ_FRAME_STRIDE = 47'520;
 
 struct options {
     std::string model_path;
+    std::string codec{"EnCodec"};
     unsigned samplerate_khz{};
     unsigned codebooks{};
     unsigned threads{1};
@@ -44,7 +45,8 @@ options parse_options(int argc, char** argv) {
         }
         if (index + 1 >= argc) throw std::runtime_error("Missing value for " + std::string(argument));
         const std::string_view value{argv[++index]};
-        if (argument == "--model") result.model_path = value;
+        if (argument == "--codec") result.codec = value;
+        else if (argument == "--model") result.model_path = value;
         else if (argument == "--samplerate") result.samplerate_khz = parse_unsigned(value, argument);
         else if (argument == "--codebooks") result.codebooks = parse_unsigned(value, argument);
         else if (argument == "--threads") result.threads = parse_unsigned(value, argument);
@@ -52,6 +54,8 @@ options parse_options(int argc, char** argv) {
         else throw std::runtime_error("Unknown argument: " + std::string(argument));
     }
     if (result.model_path.empty()) throw std::runtime_error("--model is required");
+    if (result.codec != "EnCodec" && result.codec != "ECNG")
+        throw std::runtime_error("--codec must be EnCodec or ECNG");
     if (result.samplerate_khz != 24 && result.samplerate_khz != 48)
         throw std::runtime_error("--samplerate must be 24 or 48");
     if (result.codebooks == 0) throw std::runtime_error("--codebooks must be positive");
@@ -86,8 +90,10 @@ void append_bytes(std::vector<std::uint8_t>& output, std::span<const std::uint8_
 }
 
 std::vector<std::uint8_t> ecdc_header(const encodec::model_info& info,
-                                      std::size_t sample_frames, unsigned codebooks) {
-    const std::string model = info.sample_rate == 24'000 ? "encodec_24khz" : "encodec_48khz";
+                                      std::size_t sample_frames, unsigned codebooks,
+                                      std::string_view codec) {
+    const std::string model = codec == "ECNG" ? "ecng_24khz" :
+        (info.sample_rate == 24'000 ? "encodec_24khz" : "encodec_48khz");
     const std::string metadata = "{\"m\":\"" + model + "\",\"al\":" +
         std::to_string(sample_frames) + ",\"nc\":" + std::to_string(codebooks) +
         ",\"lm\":false}";
@@ -103,9 +109,10 @@ std::vector<std::uint8_t> encode_segment(encodec::encoder& encoder,
                                          const encodec::model_info& info,
                                          std::span<const float> audio,
                                          unsigned codebooks,
-                                         unsigned beam_size) {
+                                         unsigned beam_size,
+                                         std::string_view codec) {
     const std::size_t sample_frames = audio.size() / info.channels;
-    auto output = ecdc_header(info, sample_frames, codebooks);
+    auto output = ecdc_header(info, sample_frames, codebooks, codec);
     if (info.sample_rate == 24'000) {
         const auto frame = encoder.encode_frame(audio, codebooks, beam_size);
         append_bytes(output, frame.packet);
@@ -144,17 +151,24 @@ int main(int argc, char** argv) {
         encodec::set_num_threads(arguments.threads);
         encodec::encoder encoder(arguments.model_path);
         const auto info = encoder.info();
+        if (info.ecng != (arguments.codec == "ECNG"))
+            throw std::runtime_error("Model identity does not match --codec");
         if (info.sample_rate != arguments.samplerate_khz * 1'000u)
             throw std::runtime_error("Model sample rate does not match --samplerate");
         if (arguments.codebooks > info.max_quantizers)
             throw std::runtime_error("Requested codebooks exceed model capacity");
+        if (arguments.codec == "ECNG" && arguments.codebooks != 2 && arguments.codebooks != 4)
+            throw std::runtime_error("ECNG supports exactly 2 or 4 codebooks");
         if ((info.sample_rate == 24'000 && info.channels != 1) ||
             (info.sample_rate == 48'000 && info.channels != 2))
             throw std::runtime_error("Model channel layout is incompatible");
-        if ((info.sample_rate == 24'000 &&
+        if ((arguments.codec == "EnCodec" && info.sample_rate == 24'000 &&
              (!info.causal || info.normalized || info.max_quantizers != 32)) ||
+            (arguments.codec == "ECNG" &&
+             (info.sample_rate != 24'000 || info.channels != 1 || !info.causal ||
+              info.normalized || info.max_quantizers != 4)) ||
             (info.sample_rate == 48'000 &&
-             (info.causal || !info.normalized || info.max_quantizers != 16)))
+             (arguments.codec != "EnCodec" || info.causal || !info.normalized || info.max_quantizers != 16)))
             throw std::runtime_error("Model architecture flags are incompatible");
         if (arguments.check_model) {
             std::cout << "native model: " << info.sample_rate << " Hz, " << info.channels
@@ -176,7 +190,8 @@ int main(int argc, char** argv) {
             std::vector<float> audio(byte_count / sizeof(float));
             read_exact(reinterpret_cast<char*>(audio.data()), byte_count);
             write_response(encode_segment(
-                encoder, info, audio, arguments.codebooks, arguments.beam_size));
+                encoder, info, audio, arguments.codebooks, arguments.beam_size,
+                arguments.codec));
         }
     } catch (const std::exception& error) {
         std::cerr << "encodec-live-native: " << error.what() << '\n';

@@ -4,8 +4,14 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD_DIR=${BUILD_DIR:-"$PROJECT_DIR/build/native"}
 INSTALL_PREFIX=${INSTALL_PREFIX:-"$PROJECT_DIR"}
-ENCODEC_CPP_DIR=${ENCODEC_CPP_DIR:-"$BUILD_DIR/upstream/encodec.cpp"}
-ENCODEC_CPP_UPDATE=${ENCODEC_CPP_UPDATE:-1}
+ENCODEC_CPP_UPDATE=${ENCODEC_CPP_UPDATE:-0}
+if [ -n "${ENCODEC_CPP_DIR:-}" ]; then
+    :
+elif [ "$ENCODEC_CPP_UPDATE" = 1 ]; then
+    ENCODEC_CPP_DIR="$BUILD_DIR/upstream/encodec.cpp"
+else
+    ENCODEC_CPP_DIR="$PROJECT_DIR/native/encodec"
+fi
 BUILD_JOBS=${BUILD_JOBS:-1}
 
 case "$BUILD_JOBS" in
@@ -43,11 +49,22 @@ if [ "$ENCODEC_CPP_UPDATE" = 1 ]; then
     ENCODEC_CPP_REVISION=$(
         "$PROJECT_DIR/scripts/update-encodec-cpp.sh" "$ENCODEC_CPP_DIR"
     )
-elif [ ! -f "$ENCODEC_CPP_DIR/src/lib/encodec.cpp" ]; then
-    echo "ENCODEC_CPP_UPDATE=0 requires an existing checkout at $ENCODEC_CPP_DIR" >&2
-    exit 1
-else
+    if ! grep -q 'MODEL_ECNG' "$ENCODEC_CPP_DIR/src/lib/encodec.cpp"; then
+        echo "The selected upstream encodec.cpp revision does not support ECNG models." >&2
+        echo "Use the bundled ECNG-capable source (default), or select a compatible revision." >&2
+        exit 1
+    fi
+elif [ -f "$ENCODEC_CPP_DIR/src/lib/encodec.cpp" ]; then
     ENCODEC_CPP_REVISION=$(git -C "$ENCODEC_CPP_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+elif [ -f "$ENCODEC_CPP_DIR/encodec.cpp" ] && [ -f "$ENCODEC_CPP_DIR/encodec.h" ]; then
+    if ! grep -q 'MODEL_ECNG' "$ENCODEC_CPP_DIR/encodec.cpp"; then
+        echo "ENCODEC_CPP_DIR does not include ECNG model support: $ENCODEC_CPP_DIR" >&2
+        exit 1
+    fi
+    ENCODEC_CPP_REVISION=bundled-ecng-capable-snapshot
+else
+    echo "ENCODEC_CPP_UPDATE=0 requires a valid checkout or source directory at $ENCODEC_CPP_DIR" >&2
+    exit 1
 fi
 
 mkdir -p "$BUILD_DIR"

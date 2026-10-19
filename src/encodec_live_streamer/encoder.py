@@ -23,6 +23,8 @@ def native_encoder_path(config: Config) -> str:
 def native_command(config: Config, *, check_model: bool = False) -> list[str]:
     result = [
         native_encoder_path(config),
+        "--codec",
+        config.codec,
         "--model",
         str(config.model_path),
         "--samplerate",
@@ -32,7 +34,7 @@ def native_command(config: Config, *, check_model: bool = False) -> list[str]:
         "--threads",
         str(config.threads),
         "--beam-size",
-        str(config.beam_size),
+        str(1 if config.codec == "ECNG" else config.beam_size),
     ]
     if check_model:
         result.append("--check-model")

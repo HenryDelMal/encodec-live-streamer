@@ -91,6 +91,7 @@ namespace encodec
 
     constexpr uint32_t MODEL_CAUSAL = 1u << 0;
     constexpr uint32_t MODEL_NORMALIZED = 1u << 1;
+    constexpr uint32_t MODEL_ECNG = 1u << 2;
 
     struct runtime_model
     {
@@ -123,15 +124,19 @@ namespace encodec
         input.read(reinterpret_cast<char*>(&decoder_floats), sizeof(decoder_floats));
         input.read(reinterpret_cast<char*>(&rvq_floats), sizeof(rvq_floats));
         constexpr uint32_t MAX_MODEL_FLOATS = 256u * 1024u * 1024u;
+        const bool ecng = (flags & MODEL_ECNG) != 0;
         if (!input || (sample_rate != 24000 && sample_rate != 48000) ||
             (channels != 1 && channels != 2) || max_quantizers == 0 ||
             encoder_floats > MAX_MODEL_FLOATS || decoder_floats > MAX_MODEL_FLOATS ||
-            rvq_floats > MAX_MODEL_FLOATS)
+            rvq_floats > MAX_MODEL_FLOATS ||
+            (ecng && (sample_rate != 24000 || channels != 1 || max_quantizers != 4 ||
+                      (flags & MODEL_CAUSAL) == 0 || (flags & MODEL_NORMALIZED) != 0 ||
+                      decoder_floats != 0)))
             throw std::runtime_error("Invalid EnCodec model configuration");
 
         runtime_model model;
         model.info = {sample_rate, channels, max_quantizers,
-                      (flags & MODEL_CAUSAL) != 0, (flags & MODEL_NORMALIZED) != 0};
+                      (flags & MODEL_CAUSAL) != 0, (flags & MODEL_NORMALIZED) != 0, ecng};
         model.encoder_weights.resize(encoder_floats);
         model.decoder_weights.resize(decoder_floats);
         model.rvq_weights.resize(rvq_floats);

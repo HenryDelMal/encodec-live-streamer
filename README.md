@@ -123,38 +123,40 @@ selected profile, and the running service logs a warning when it is not.
 
 - A recent mainstream Linux distribution using systemd for the supplied unit.
 - Python 3.9 or newer.
-- A C++20 compiler, CMake, Git, FFmpeg, and Python virtual-environment support.
+- A C++20 compiler, CMake, FFmpeg, and Python virtual-environment support.
 - nginx or another static HTTP server if clients need network access.
 - Sufficient CPU/RAM for the selected neural model. Real-time performance is not
   guaranteed; measure it on the intended server.
-- Internet access for native builds and while preparing the official
-  checkpoints. PyTorch is used in a temporary model-export environment and
-  removed afterward.
+- Internet access is needed to prepare official EnCodec checkpoints, or to
+  explicitly opt into updating the native dependency. ECNG uses its bundled
+  checkpoint and native source, without PyTorch or network downloads.
 
-The runtime model format contains both encoder and decoder weights. This lets the
-same C++ core support Linux encoding and Android decoding while keeping large
-model files outside Git.
+Official EnCodec runtime files contain both encoder and decoder weights and
+are prepared from Meta's checkpoints during installation. ECNG instead ships
+its checkpoint-specific encoder/RVQ file with this project; the matching
+decoder remains in the OndaBaja Android app. See [the ECNG profile guide](docs/ECNG.md).
 
 ### encodec.cpp updates
 
-Every `scripts/build-native.sh` run fetches the current `main` revision from
-[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp) into the
-ignored native build directory before compiling. The exact commit is printed
-and recorded in `build/native/encodec-cpp-revision.txt`. A failed fetch stops
-the build instead of silently compiling an older dependency.
+By default, `scripts/build-native.sh` uses the bundled `native/encodec`
+snapshot. It includes the ECNG model-header support required by the bundled
+joint-training checkpoint and builds offline. The source selection is printed
+and recorded in `build/native/encodec-cpp-revision.txt`.
 
-Tracking a moving branch is convenient but not reproducible and means a future
-upstream change can break a build. To reproduce or qualify a specific upstream
-revision, set a tag or commit explicitly:
+Upstream updates are opt-in. `ENCODEC_CPP_UPDATE=1` fetches
+[HenryDelMal/encodec.cpp](https://github.com/HenryDelMal/encodec.cpp); the build
+stops with a clear error if that revision does not understand ECNG models. To
+select a specific upstream tag or commit:
 
 ```bash
+ENCODEC_CPP_UPDATE=1 \
 ENCODEC_CPP_REF=f9263fb4e781d7ac855f83660935c8d9868231a8 \
   ./scripts/build-native.sh
 ```
 
-For an intentionally offline rebuild, retain the managed checkout under the
-build directory and use `ENCODEC_CPP_UPDATE=0`. Normal builds always check the
-upstream repository.
+See [the ECNG profile guide](docs/ECNG.md) for its model, install, and update
+commands. `scripts/prepare-models.sh ECNG` prepares ECNG without downloading the
+official checkpoints; `EnCodec` and `all` select the official models or both.
 
 CMake cache files contain absolute paths. If an installation directory is
 copied or renamed, `build-native.sh` detects the relocated cache and regenerates

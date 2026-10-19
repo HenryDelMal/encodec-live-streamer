@@ -35,6 +35,7 @@ MODEL_PROFILES = {
 class Config:
     input: str
     output_dir: pathlib.Path
+    codec: str = "EnCodec"
     input_format: str | None = None
     input_options: tuple[str, ...] = ()
     output_options: tuple[str, ...] = ()
@@ -66,6 +67,12 @@ class Config:
 
     @property
     def profile(self) -> dict[str, Any]:
+        if self.codec == "ECNG":
+            return {
+                "model": "ecng_24khz", "sample_rate": 24_000, "channels": 1,
+                "frame_rate": 75, "alignment_samples": 320,
+                "bandwidths": {1.5: 2, 3.0: 4},
+            }
         return MODEL_PROFILES[self.samplerate]
 
     @property
@@ -86,6 +93,8 @@ class Config:
 
     @property
     def model_path(self) -> pathlib.Path:
+        if self.codec == "ECNG":
+            return self.model_dir / "ecng-24khz-encoder-f32.bin"
         return self.model_dir / f"{self.model}-combined-f32.bin"
 
     @property
@@ -112,6 +121,10 @@ class Config:
         return "the 24 kHz model's 320-sample (1/75-second) codec frame"
 
     def validate(self) -> Config:
+        if self.codec not in {"EnCodec", "ECNG"}:
+            raise ValueError('codec must be "EnCodec" or "ECNG"')
+        if self.codec == "ECNG" and self.samplerate != 24:
+            raise ValueError("ECNG supports only samplerate=24")
         if not self.input:
             raise ValueError("input must not be empty")
         if isinstance(self.samplerate, bool) or not isinstance(self.samplerate, int):

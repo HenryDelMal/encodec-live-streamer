@@ -31,7 +31,7 @@ fi
 
 install -d -m 0755 "$INSTALL_DIR"
 if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
-    for directory in src config deploy docs scripts native tools; do
+    for directory in src config deploy docs scripts native tools models; do
         cp -a "$SOURCE_DIR/$directory" "$INSTALL_DIR/"
     done
     for file in pyproject.toml MANIFEST.in README.md LICENSE THIRD_PARTY_NOTICES.md Makefile; do
@@ -40,10 +40,12 @@ if [ "$SOURCE_DIR" != "$INSTALL_DIR" ]; then
     chown -R root:root \
         "$INSTALL_DIR/src" "$INSTALL_DIR/config" "$INSTALL_DIR/deploy" \
         "$INSTALL_DIR/docs" "$INSTALL_DIR/scripts" "$INSTALL_DIR/native" \
+        "$INSTALL_DIR/models" \
         "$INSTALL_DIR/tools"
     chmod -R go-w \
         "$INSTALL_DIR/src" "$INSTALL_DIR/config" "$INSTALL_DIR/deploy" \
         "$INSTALL_DIR/docs" "$INSTALL_DIR/scripts" "$INSTALL_DIR/native" \
+        "$INSTALL_DIR/models" \
         "$INSTALL_DIR/tools"
 fi
 
@@ -62,19 +64,22 @@ BUILD_DIR="$INSTALL_DIR/build/native" INSTALL_PREFIX="$INSTALL_DIR" \
 "$INSTALL_DIR/.venv/bin/python" -m pip install --upgrade pip setuptools wheel
 "$INSTALL_DIR/.venv/bin/python" -m pip install "$INSTALL_DIR"
 
+if [ ! -e /etc/encodec-live.toml ]; then
+    install -o root -g "$SERVICE_GROUP" -m 0640 \
+        "$INSTALL_DIR/config/encodec-live-ecng.example.toml" /etc/encodec-live.toml
+fi
+CONFIG_CODEC=$("$INSTALL_DIR/.venv/bin/python" -c \
+    'import sys; from encodec_live_streamer.config import Config; print(Config.from_toml(sys.argv[1]).codec)' \
+    /etc/encodec-live.toml)
 MODEL_DIR=/opt/encodec-live/models \
 NATIVE_ENCODER="$INSTALL_DIR/bin/encodec-live-native" \
 PYTHON="$PYTHON" PYTORCH_INDEX_URL="$PYTORCH_INDEX_URL" \
 PYTORCH_PACKAGE="$PYTORCH_PACKAGE" \
 TORCH_HOME="$INSTALL_DIR/.cache/torch" \
-    "$INSTALL_DIR/scripts/prepare-models.sh"
+    "$INSTALL_DIR/scripts/prepare-models.sh" "$CONFIG_CODEC"
 chown -R root:root /opt/encodec-live/models
 chmod -R go-w /opt/encodec-live/models
 
-if [ ! -e /etc/encodec-live.toml ]; then
-    install -o root -g "$SERVICE_GROUP" -m 0640 \
-        "$INSTALL_DIR/config/encodec-live.example.toml" /etc/encodec-live.toml
-fi
 install -o root -g root -m 0644 \
     "$INSTALL_DIR/deploy/encodec-live.service" /etc/systemd/system/encodec-live.service
 

@@ -11,13 +11,40 @@ TORCH_HOME=${TORCH_HOME:-"$PROJECT_DIR/.cache/torch"}
 
 mkdir -p "$MODEL_DIR" "$TORCH_HOME"
 
+CODEC=${1:-all}
+case "$CODEC" in
+    EnCodec|ECNG|all) ;;
+    *) echo "Usage: $0 [EnCodec|ECNG|all]" >&2; exit 2 ;;
+esac
+
+# ECNG uses a checkpoint-specific encoder distributed with the project. It is
+# copied and validated without downloading PyTorch or the official checkpoints.
+if [ "$CODEC" = ECNG ] || [ "$CODEC" = all ]; then
+    ECNG_SOURCE="$PROJECT_DIR/models/ecng-24khz-encoder-f32.bin"
+    ECNG_MODEL="$MODEL_DIR/ecng-24khz-encoder-f32.bin"
+    if [ ! -f "$ECNG_SOURCE" ]; then
+        echo "ECNG model is missing from the project: $ECNG_SOURCE" >&2
+        exit 1
+    fi
+    if ! cmp -s "$ECNG_SOURCE" "$ECNG_MODEL"; then
+        install -m 0644 "$ECNG_SOURCE" "$ECNG_MODEL"
+    fi
+    "$NATIVE_ENCODER" --codec ECNG --model "$ECNG_MODEL" --samplerate 24 \
+        --codebooks 4 --threads 1 --beam-size 1 --check-model
+fi
+
+if [ "$CODEC" = ECNG ]; then
+    echo "Prepared ECNG model in $MODEL_DIR"
+    exit 0
+fi
+
 needs_export=false
 for samplerate in 24 48; do
     model="$MODEL_DIR/encodec_${samplerate}khz-combined-f32.bin"
     codebooks=4
     [ "$samplerate" -eq 48 ] && codebooks=2
     if [ ! -f "$model" ] || ! "$NATIVE_ENCODER" \
-        --model "$model" --samplerate "$samplerate" --codebooks "$codebooks" \
+        --codec EnCodec --model "$model" --samplerate "$samplerate" --codebooks "$codebooks" \
         --threads 1 --check-model >/dev/null 2>&1; then
         needs_export=true
     fi
@@ -45,7 +72,7 @@ for samplerate in 24 48; do
     codebooks=4
     [ "$samplerate" -eq 48 ] && codebooks=2
     if [ -f "$model" ] && "$NATIVE_ENCODER" \
-        --model "$model" --samplerate "$samplerate" --codebooks "$codebooks" \
+        --codec EnCodec --model "$model" --samplerate "$samplerate" --codebooks "$codebooks" \
         --threads 1 --check-model >/dev/null 2>&1; then
         echo "Keeping valid model: $model"
         continue
@@ -56,8 +83,8 @@ for samplerate in 24 48; do
         --include-encoder \
         --output "$temporary"
     install -m 0644 "$temporary" "$model"
-    "$NATIVE_ENCODER" --model "$model" --samplerate "$samplerate" \
+    "$NATIVE_ENCODER" --codec EnCodec --model "$model" --samplerate "$samplerate" \
         --codebooks "$codebooks" --threads 1 --check-model
 done
 
-echo "Prepared combined native models in $MODEL_DIR"
+echo "Prepared native models in $MODEL_DIR"
